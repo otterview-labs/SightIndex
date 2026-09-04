@@ -1,0 +1,466 @@
+/* Visual polish layered over console.css: native controls, empty states, density. */
+
+/* Keyboard focus was easy to lose against the light console background. Keep one clear ring
+   across native controls and custom buttons without changing the existing color language. */
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid rgba(36, 119, 255, 0.28);
+  outline-offset: 2px;
+}
+
+/* On narrow screens the five section links should remain usable instead of wrapping the header
+   into an unpredictable second row. Horizontal scrolling preserves every route and touch target. */
+@media (max-width: 860px) {
+  .topbar .top-nav {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .topbar .top-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .topbar .top-nav .nav-link {
+    flex: 0 0 auto;
+  }
+
+  .topbar .top-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* ---- file field ---------------------------------------------------------------------- */
+
+.file-field {
+  display: grid;
+  gap: 6px;
+}
+
+.file-field-label {
+  color: #667482;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.file-drop {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.file-drop:hover,
+.file-drop.is-dragging {
+  border-color: #2477ff;
+  background: #f0f6ff;
+}
+
+.file-drop input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.file-icon,
+.file-thumb-generic {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #e8f0fe;
+  color: #2477ff;
+}
+
+.file-icon svg,
+.file-thumb-generic svg,
+.file-clear svg {
+  width: 18px;
+  height: 18px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.file-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.file-meta strong {
+  overflow: hidden;
+  color: #1f2933;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-meta small {
+  color: #8493a3;
+  font-size: 11px;
+}
+
+/* ---- native selects and date inputs ------------------------------------------------- */
+
+.topbar select,
+.page-workspace select,
+.workspace select {
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23667482' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='m4 6 4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px 14px;
+}
+
+input[type="datetime-local"],
+input[type="date"] {
+  min-height: 38px;
+}
+
+/* ---- empty states -------------------------------------------------------------------- */
+
+/* console.css draws an empty 26px square here via `content: ""`; give it an actual glyph. */
+.media-grid > .empty::before,
+.stream-list > .empty::before,
+.diagnostic-list > .empty::before,
+.trajectory-list > .empty::before,
+.chat-log > .empty::before {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 13h4l2 3h6l2-3h4'/><path d='M5 5h14l2 8v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4z'/></svg>")
+      no-repeat center / 20px 20px,
+    #eef3f9;
+}
+
+.label-more {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #eef3f9;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.source-cell {
+  display: grid;
+  gap: 3px;
+  max-width: 190px;
+}
+
+.source-cell code {
+  overflow: hidden;
+  color: #7b8794;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* console.css lays this grid out for nine children: four fields, four checkbox cards and the
+   submit button. The cards collapsed into one group, so the template needs six columns.
+   Bounded to the desktop range, otherwise this outranks the narrow-screen templates below
+   1180px and forces the page to scroll sideways. */
+@media (min-width: 1181px) {
+  .observation-filters {
+    grid-template-columns:
+      minmax(180px, 1.1fr)
+      repeat(2, minmax(186px, 0.8fr))
+      minmax(96px, 0.4fr)
+      minmax(0, auto)
+      auto;
+  }
+}
+
+.filter-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Scoped past `.observation-filters label { display: grid }`, which stacks the box over the text. */
+.observation-filters .filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  user-select: none;
+}
+
+.observation-filters .filter-toggle:hover {
+  border-color: #b9cbe4;
+}
+
+.observation-filters .filter-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #2477ff;
+}
+
+.observation-filters .filter-toggle:has(input:checked) {
+  border-color: #2477ff;
+  background: #f0f6ff;
+  color: #1d4ed8;
+}
+
+/* ---- monitor: collapse the stage when nothing is playing ----------------------------- */
+
+/* aspect-ratio: 16/8 from console.css would turn a fixed height into a 480px width. */
+.reference-workspace .live-stage.is-idle {
+  min-height: 0;
+  height: 240px;
+  width: 100%;
+  aspect-ratio: auto;
+}
+
+/* console.css paints its own "VIDEO INPUT" card here; .stage-placeholder replaces it with copy
+   that can say whether any stream is registered at all. */
+.reference-workspace .live-stage.is-idle::after {
+  content: none;
+}
+
+.live-stage.is-idle .viewport-badges,
+.live-stage.is-idle .live-count-badge {
+  display: none;
+}
+
+.stage-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 20px;
+  text-align: center;
+}
+
+.stage-placeholder .stage-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  background: rgba(110, 168, 255, 0.12);
+  color: #6ea8ff;
+}
+
+.stage-placeholder .stage-icon svg {
+  width: 24px;
+  height: 24px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.stage-placeholder strong {
+  color: #dbe7f6;
+  font-size: 14px;
+}
+
+.stage-placeholder span {
+  max-width: 320px;
+  color: #7f93ab;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.observation-table .mono-id {
+  font-size: 10px;
+  letter-spacing: -0.01em;
+}
+
+.observation-row-actions {
+  flex-wrap: nowrap;
+}
+
+.reid-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: #667482;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.reid-fingerprint {
+  font-weight: 500;
+}
+
+.reid-fingerprint summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.reid-fingerprint dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 12px;
+  margin: 9px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+
+.reid-fingerprint dt {
+  color: var(--muted);
+}
+
+.reid-fingerprint dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reid-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  grid-template-areas:
+    "header  header"
+    "query   links"
+    "query   results";
+  align-items: start;
+}
+
+.reid-workspace .page-header {
+  grid-area: header;
+}
+
+.reid-query {
+  grid-area: query;
+  /* The results run far past the fold, and every one of them is judged against this image. */
+  position: sticky;
+  top: 16px;
+}
+
+.reid-results {
+  grid-area: results;
+}
+
+@media (max-width: 1024px) {
+  .reid-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "header" "query" "links" "results";
+  }
+}
+
+/* The collapsed labels were reachable only by hovering for a tooltip, which is unreadable and
+   on a touchscreen impossible. The counter is a button now, so it has to look like one. */
+button.label-more {
+  border: 1px solid var(--line);
+  cursor: pointer;
+  min-height: 24px;
+  font-family: inherit;
+}
+
+button.label-more:hover {
+  background: #e2e9f2;
+  color: var(--ink, #1f2933);
+}
+
+/* The action column had no width of its own, so the table crushed it until each button read
+   one character per line and the last one was clipped off the page entirely. */
+
+.observation-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.observation-row-actions .mini-button,
+.observation-row-actions .mini-link {
+  white-space: nowrap;
+}
+
+/* Two uuids per row, none of them readable, holding a column open. */
+.source-cell code {
+  font-size: 11px;
+}
+
+
+/* Two numbers in a four-column grid, each taking half the page for one figure. Read as a line
+   instead -- the counts are context for the table, not the point of the screen. */
+.observation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.observation-summary > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 9px 16px;
+}
+
+.observation-summary strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The topbar's secondary buttons were coloured for a dark bar -- an earlier revision had one --
+   and the light rewrite left them at #687684 on white, 11px. On the ReID page 重建索引 and the
+   API link read as disabled when both were live. Darker text and a border that exists. */
+.topbar .button,
+.topbar .button.ghost,
+.topbar .last-updated {
+  color: #46566a;
+  border-color: #c3cedd;
+  font-size: 12px;
+}
+
+.topbar .button.primary {
+  color: #fff;
+}
+
+/* Disabled has to stay distinguishable from merely secondary, which it was not before. */
+.topbar .button:disabled {
+  color: #9aa7b6;
+  border-color: var(--line);
+  background: #f6f8fb;
+  cursor: not-allowed;
+}
+
+/* Three buttons on one line: at 190px they wrapped, and a wrapped row of buttons reads as two
+   groups rather than one set of choices. */
+.observation-row-actions {
+  gap: 5px;
+}
+
+.observation-row-actions .mini-button,
+.observation-row-actions .mini-link {
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+/* Identifiers are for looking up a row, not for reading down the page. */
+.source-cell code {
+  color: var(--faint);
+}

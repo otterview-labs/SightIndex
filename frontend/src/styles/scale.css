@@ -1,0 +1,242 @@
+/* A larger, more deliberate type and spacing scale for a wide operations canvas.
+   console.css was tuned compact: the headline metric rendered at 19px, three pixels larger than
+   body text, and page titles at 22px inside a 102px header.
+
+   Bounded to >=1024px. Below that the compact scale is the right one, and the larger controls
+   push the observation filter row wide enough to scroll the page sideways. Everything here is
+   scoped at or above the specificity console.css uses for the same element. */
+
+@media (min-width: 1024px) {
+  :root {
+    --step-display: 38px;
+    --step-title: 30px;
+    --step-section: 19px;
+    --step-body: 13.5px;
+    --step-label: 12px;
+
+    --space-page: 26px;
+    --space-panel: 24px;
+    --space-stack: 20px;
+  }
+
+  /* ---- topbar ---------------------------------------------------------------------------- */
+
+  .topbar {
+    min-height: 76px;
+    padding: 12px 26px;
+    gap: 26px;
+  }
+
+  .topbar h1 {
+    font-size: 22px;
+    letter-spacing: -0.015em;
+  }
+
+  .topbar p {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+  }
+
+  .topbar .nav-link {
+    min-height: 38px;
+    padding: 0 13px;
+    font-size: 13px;
+  }
+
+  /* ---- page canvas ----------------------------------------------------------------------- */
+
+  .workspace,
+  .page-workspace {
+    padding: var(--space-page) var(--space-page) 34px;
+    gap: 22px;
+  }
+
+  /* ---- page header ----------------------------------------------------------------------- */
+
+  .page-header h2,
+  .sentinel-page-header h2,
+  .observation-head h2 {
+    font-size: var(--step-title);
+    font-weight: 860;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+
+  .page-header p,
+  .sentinel-page-header p,
+  .observation-head p {
+    max-width: 68ch;
+    font-size: var(--step-body);
+    line-height: 1.65;
+  }
+
+  /* The nav already names the section, so the page title is an anchor, not a headline: one
+     compact row that carries whatever actions the page has. Monitor never had a banner and
+     read the best of the five, so the others match it. */
+  .page-header,
+  .observation-head.page-header,
+  .sentinel-page-header.page-header {
+    align-items: center;
+    padding: 0 0 16px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .page-header h2,
+  .observation-head h2,
+  .sentinel-page-header h2 {
+    font-size: 21px;
+    font-weight: 850;
+    letter-spacing: -0.015em;
+  }
+
+  .page-shell .page-header::before {
+    content: none;
+  }
+
+  .search-main > .sentinel-page-header.page-header {
+    padding: 0 0 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* The submit button sat flush against the name field. */
+  .observation-person-create {
+    gap: 10px;
+  }
+
+  .page-header p,
+  .sentinel-page-header p,
+  .observation-head p {
+    margin-top: 10px;
+    font-size: 14px;
+  }
+
+  /* ---- headline metrics ------------------------------------------------------------------ */
+
+  /* The whole point of the overview strip; it should read from across the room. */
+  .overview {
+    gap: 0;
+    padding: 4px 6px;
+  }
+
+  .overview .metric {
+    gap: 6px;
+    padding: 16px 30px 16px 0;
+  }
+
+  .overview .metric strong {
+    font-size: var(--step-display);
+    font-weight: 820;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .overview .metric span {
+    font-size: var(--step-label);
+    font-weight: 750;
+    letter-spacing: 0.06em;
+  }
+
+  /* The status cell carries a sentence, not a number, so it must not use the display size. */
+  .overview .metric.wide strong {
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.4;
+  }
+
+  .observation-summary > div {
+    gap: 6px;
+    padding: 18px 22px;
+  }
+
+  .observation-summary strong {
+    font-size: 28px;
+    font-weight: 820;
+    letter-spacing: -0.025em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .observation-summary span {
+    font-size: var(--step-label);
+    font-weight: 750;
+    letter-spacing: 0.06em;
+  }
+
+  /* ---- panels and sections ---------------------------------------------------------------- */
+
+  .panel {
+    border-radius: 14px;
+  }
+
+  /* Each panel already owns its inner padding; scale those rather than adding another layer to
+     the section heads, which would double up and pull the titles out of line with their badges. */
+  .live-player {
+    padding: 18px;
+  }
+
+  .reference-toolbar {
+    padding: 12px 18px;
+  }
+
+  .media-grid {
+    padding: 0 18px 18px;
+  }
+
+  .stream-panel {
+    padding: var(--space-panel);
+  }
+
+  .face-context,
+  .face-main,
+  .chat-main,
+  .chat-context,
+  .question-filter-panel,
+  .question-content-panel {
+    padding: var(--space-panel);
+  }
+
+  .section-head h2,
+  .panel-title-line h2 {
+    font-size: var(--step-section);
+    letter-spacing: -0.015em;
+  }
+
+  .section-head p {
+    font-size: var(--step-body);
+    line-height: 1.6;
+  }
+
+  .list-head {
+    font-size: var(--step-label);
+    letter-spacing: 0.05em;
+  }
+
+  /* ---- controls --------------------------------------------------------------------------- */
+
+  .button {
+    min-height: 40px;
+    padding: 0 18px;
+    border-radius: 9px;
+    font-size: 13px;
+  }
+
+  .button.wide {
+    min-height: 44px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 13.5px;
+  }
+
+  .observation-filters input,
+  .observation-filters select,
+  .observation-filters .filter-toggle {
+    min-height: 42px;
+  }
+}

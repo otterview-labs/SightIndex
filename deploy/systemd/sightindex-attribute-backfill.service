@@ -1,0 +1,26 @@
+# Optional durable structured-attribute backfill worker.
+
+[Unit]
+Description=SightIndex structured-attribute backfill
+After=network-online.target sightindex-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sightindex
+Group=sightindex
+WorkingDirectory=/opt/sightindex
+EnvironmentFile=/opt/sightindex/.env
+Environment=HOME=/var/lib/sightindex
+ExecStart=/opt/sightindex/.venv/bin/python scripts/attribute_backfill.py --batch-size 50 --max-attempts 3
+Restart=on-failure
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=130
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+sqlalchemy>=2.0.30
+psycopg[binary]>=3.2.0
+pydantic-settings>=2.4.0
+python-multipart>=0.0.9
+numpy<2
+opencv-python-headless>=4.10.0
+pymilvus>=2.4.0,<3.1
+
+# ReID service (deploy/agx/reid_service). torch/torchvision come from the Jetson wheel venv
+# exposed via REID_SERVICE_PYTHONPATH (or QWEN3_VL_EMBEDDING_PYTHONPATH), not from pip here.
+# Also required on disk: data/models/sapiensid_wb12m/ (1.5GB, see reid_service/README.md) and
+# ~/.cache/yolov8n-pose.pt for the pose stage. The DFA aligner asset is vendored beside its
+# upstream license under deploy/agx/reid_service/sapiensid/.
+ultralytics>=8.3.0
+easydict>=1.10
+timm>=1.0.0
+transformers>=4.40.0
+omegaconf>=2.3.0
+pyrootutils>=1.0.4
+safetensors>=0.4.0
+pandas>=2.0.0
+pillow>=10.4.0

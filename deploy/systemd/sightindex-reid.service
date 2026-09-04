@@ -1,0 +1,29 @@
+# Optional SapiensID ReID model service.
+
+[Unit]
+Description=SightIndex ReID (SapiensID) service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sightindex
+Group=sightindex
+WorkingDirectory=/opt/sightindex
+EnvironmentFile=/opt/sightindex/.env
+Environment=HOME=/var/lib/sightindex
+Environment=REID_SERVICE_FOREGROUND=1
+ExecStart=/usr/bin/env bash deploy/agx/start_reid_service.sh
+Restart=always
+RestartSec=10
+# Model loading and asset verification can take several minutes.
+TimeoutStartSec=300
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

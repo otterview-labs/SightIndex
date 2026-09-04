@@ -1,0 +1,27 @@
+# SightIndex API and console. This template expects the repository at
+# /opt/sightindex and runtime data owned by the sightindex service account.
+
+[Unit]
+Description=SightIndex API and console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sightindex
+Group=sightindex
+WorkingDirectory=/opt/sightindex
+EnvironmentFile=/opt/sightindex/.env
+Environment=HOME=/var/lib/sightindex
+ExecStart=/opt/sightindex/.venv/bin/python -m uvicorn main:app --host ${APP_HOST} --port ${APP_PORT} --workers 1
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

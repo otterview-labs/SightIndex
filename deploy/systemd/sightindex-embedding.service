@@ -1,0 +1,31 @@
+# Optional isolated visual embedding API. Model, dimension, device, and API-key
+# settings come from /opt/sightindex/.env.
+
+[Unit]
+Description=SightIndex visual embedding service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sightindex
+Group=sightindex
+WorkingDirectory=/opt/sightindex
+EnvironmentFile=/opt/sightindex/.env
+Environment=HOME=/var/lib/sightindex
+Environment="APP_NAME=SightIndex Embedding"
+Environment=AUTO_CREATE_TABLES=false
+Environment=STREAM_AUTOSTART_RUNNING=false
+# Exec-time overrides prevent the worker from calling itself recursively.
+ExecStart=/usr/bin/env VISUAL_EMBEDDING_PROVIDER=sentence_transformers VISUAL_EMBEDDING_SERVICE_URL= /opt/sightindex/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 18021 --workers 1
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

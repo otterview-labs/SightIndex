@@ -1,0 +1,24 @@
+/* display:contents keeps the teleport wrapper out of the .top-actions flex row. */
+.page-actions {
+  display: contents;
+}
+
+.toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+@keyframes toast-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}

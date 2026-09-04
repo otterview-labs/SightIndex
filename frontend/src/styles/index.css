@@ -1,0 +1,30 @@
+/* console.css is the two pre-migration stylesheets concatenated in their original link order.
+   Do not deduplicate it by merging repeated selectors: moving a selector to its last occurrence
+   reorders it against equal-specificity selectors in between, which breaks .media-grid.hidden. */
+@import "./console.css";
+@import "./app-shell.css";
+@import "./polish.css";
+@import "./scale.css";
+
+/*
+ * Why this is still one big global sheet.
+ *
+ * Two mechanical restructurings were tried and both broke the pages; the pixel harness
+ * (scripts/pixel-diff.mjs) caught each one.
+ *
+ *   Merging duplicate selectors: of 137 duplicates, 133 have a rule in between that touches the
+ *   same property at equal specificity. They are not redundant -- the cascade is the design.
+ *   scripts/css-merge.mjs reports this in a second.
+ *
+ *   Moving page-exclusive rules into their components: 473 of them qualify by usage
+ *   (scripts/css-owners.mjs), but the views are lazily routed, so their style chunks load after
+ *   the global sheet. Many of those rules are early-revision styles that a later global rule was
+ *   written to override; loading them last hands the win back to the old version. Monitor came
+ *   back 52% different, looking like a previous design.
+ *
+ * What did work: deleting rules that match nothing (scripts/css-dead.mjs), which removed 1141
+ * lines at 0.00-0.02% pixel change.
+ *
+ * The remaining path is a real per-page rewrite -- authoring new CSS against the harness, page by
+ * page -- not any reordering of what is here.
+ */
