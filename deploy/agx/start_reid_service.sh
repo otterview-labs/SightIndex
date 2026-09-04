@@ -4,8 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
-mkdir -p logs
-
 set -a
 [ -f .env ] && . ./.env
 set +a
@@ -54,18 +52,6 @@ if [ -n "$REID_PYTHONPATH" ]; then
   done
 fi
 
-if [ -f logs/reid_service.pid ]; then
-  old_pid="$(cat logs/reid_service.pid || true)"
-  if [ -n "$old_pid" ]; then
-    kill "$old_pid" >/dev/null 2>&1 || true
-  fi
-fi
-
-port_pids="$(lsof -t -i:"$REID_SERVICE_PORT" -sTCP:LISTEN 2>/dev/null || true)"
-if [ -n "$port_pids" ]; then
-  kill $port_pids >/dev/null 2>&1 || true
-fi
-
 # Under a supervisor the process must stay in the foreground, or the supervisor watches a shell
 # that exits immediately and never notices the service dying. Everything above -- asset checks,
 # torch library paths -- is wanted either way, so the two modes share it.
@@ -81,6 +67,21 @@ if [ "${REID_SERVICE_FOREGROUND:-0}" = "1" ]; then
       --app-dir deploy/agx/reid_service \
       --host "$REID_SERVICE_HOST" \
       --port "$REID_SERVICE_PORT"
+fi
+
+# PID files and repository-local logs are only for the manual background helper. The systemd
+# service writes to journald and runs with a read-only application checkout.
+mkdir -p logs
+if [ -f logs/reid_service.pid ]; then
+  old_pid="$(cat logs/reid_service.pid || true)"
+  if [ -n "$old_pid" ]; then
+    kill "$old_pid" >/dev/null 2>&1 || true
+  fi
+fi
+
+port_pids="$(lsof -t -i:"$REID_SERVICE_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+if [ -n "$port_pids" ]; then
+  kill $port_pids >/dev/null 2>&1 || true
 fi
 
 nohup env \

@@ -43,43 +43,64 @@ The Milvus Compose file does not publish its etcd or MinIO ports. Keep that boun
 The commands below use these paths and identities:
 
 ```text
-Application:  /opt/sightindex
-Service user: sightindex
-Runtime data: /var/lib/sightindex/data
+Application:        /opt/sightindex
+Deployment account: sightindex-deploy
+Service account:    sightindex
+Runtime data:       /var/lib/sightindex/data
 ```
 
-The systemd templates under `deploy/systemd/` use the same values.
+The deployment account owns the reviewed source, virtual environment, and frontend bundle. The
+service account can read those files but can write only runtime paths under `/var/lib/sightindex`.
+This prevents a compromised application process from replacing a script that an administrator
+will later run with `sudo`. The systemd templates under `deploy/systemd/` use the same paths.
 
 ## 1. Install the source
 
-Create a dedicated, non-login service account and an empty application directory:
+Create separate non-login service and deployment accounts. Both use the `sightindex` group, but
+only the deployment account owns the application checkout:
 
 ```bash
-sudo useradd --system --create-home --home-dir /var/lib/sightindex \
+sudo groupadd --system sightindex
+sudo useradd --system --gid sightindex --create-home --home-dir /var/lib/sightindex \
   --shell /usr/sbin/nologin sightindex
-sudo install -d -o sightindex -g sightindex /opt/sightindex
-sudo install -d -o sightindex -g sightindex /var/lib/sightindex/data
+sudo useradd --system --gid sightindex --create-home --home-dir /var/lib/sightindex-deploy \
+  --shell /usr/sbin/nologin sightindex-deploy
+sudo install -d -m 0750 -o sightindex-deploy -g sightindex /opt/sightindex
+sudo install -d -m 0750 -o root -g sightindex /var/lib/sightindex
+sudo install -d -m 0700 -o sightindex -g sightindex /var/lib/sightindex/data
+sudo install -d -m 0700 -o sightindex -g sightindex /var/lib/sightindex/.cache
 ```
+
+If these identities already exist, verify their home, primary group, and directory ownership
+instead of recreating them.
 
 Clone a reviewed release commit or tag. Do not deploy by copying a selection of changed files:
 
 ```bash
-sudo -u sightindex -H git clone https://github.com/otterview-labs/SightIndex.git /opt/sightindex
-cd /opt/sightindex
-git rev-parse HEAD
+sudo -u sightindex-deploy -H sh -c 'umask 027; git clone https://github.com/otterview-labs/SightIndex.git /opt/sightindex'
+sudo -u sightindex-deploy -H git -C /opt/sightindex rev-parse HEAD
 ```
 
-Record that commit in the release ticket or deployment log.
+Record that commit in the release ticket or deployment log. Confirm that `sightindex` can read the
+checkout but cannot modify it:
+
+```bash
+sudo -u sightindex test -r /opt/sightindex/main.py
+if sudo -u sightindex test -w /opt/sightindex; then
+  echo 'unsafe: service account can modify the deployment checkout' >&2
+  exit 1
+fi
+```
 
 ## 2. Create the Python environment and frontend bundle
 
 ```bash
 cd /opt/sightindex
-sudo -u sightindex -H python3 -m venv .venv
-sudo -u sightindex -H .venv/bin/python -m pip install --upgrade pip
-sudo -u sightindex -H .venv/bin/python -m pip install -r requirements.txt
-sudo -u sightindex -H npm --prefix frontend ci
-sudo -u sightindex -H npm --prefix frontend run build
+sudo -u sightindex-deploy -H python3 -m venv .venv
+sudo -u sightindex-deploy -H .venv/bin/python -m pip install --upgrade pip
+sudo -u sightindex-deploy -H .venv/bin/python -m pip install -r requirements.txt
+sudo -u sightindex-deploy -H npm --prefix frontend ci
+sudo -u sightindex-deploy -H npm --prefix frontend run build
 test -f frontend/dist/index.html
 ```
 
@@ -90,10 +111,10 @@ requirements files. Install only the profile needed by the host:
 
 ```bash
 # Local visual embedding and model tooling
-sudo -u sightindex -H .venv/bin/python -m pip install -r requirements.visual.txt
+sudo -u sightindex-deploy -H .venv/bin/python -m pip install -r requirements.visual.txt
 
 # Jetson/AGX non-PyTorch dependencies
-sudo -u sightindex -H .venv/bin/python -m pip install -r requirements.agx.txt
+sudo -u sightindex-deploy -H .venv/bin/python -m pip install -r requirements.agx.txt
 ```
 
 `requirements.agx.txt` intentionally does not install PyTorch or torchvision. On Jetson, provide a
@@ -103,12 +124,13 @@ wheel without knowing the JetPack release.
 
 ## 3. Own the environment file
 
-Create the runtime file from the tracked template:
+Create the runtime file from the tracked template. It is owned by root and read-only to the service
+group; the application process must not be able to change deployment secrets or launcher options:
 
 ```bash
 cd /opt/sightindex
-sudo -u sightindex install -m 600 .env.example .env
-sudo -u sightindex sh -c '${EDITOR:-vi} .env'
+sudo install -o root -g sightindex -m 0640 .env.example .env
+sudoedit .env
 ```
 
 The deployment operator or secret manager owns `.env`; Git does not. At minimum, review:
@@ -136,6 +158,129 @@ application port on loopback and document which layer owns authentication.
 The example configuration keeps optional providers disabled. Enable each one only after its
 service, model, dimension, and credentials are ready.
 
+The environment files used by systemd, Compose, and the deployment helpers must contain simple
+`KEY=value` assignments. Quote values containing spaces. Do not place shell commands or variable
+substitutions in them.
+Use hexadecimal or base64url secrets; the RTX helpers reject shell expansion and command-control
+characters instead of trying to reinterpret them.
+
+## Automated RTX 5090 profile
+
+`deploy/rtx5090/` automates the same source-build, systemd, and Milvus path for a single x86_64
+host with an NVIDIA RTX 5090. It is a hardware profile, not a second application architecture.
+The tracked template defaults to SQLite for a compact single-host deployment. Prefer PostgreSQL
+for sustained concurrent ingest, multiple operators, or when PostgreSQL backup and monitoring are
+already part of the site platform.
+
+The wrapper deliberately does not run `git pull`. For an update, enter the maintenance window and
+stop every process that can lazily import or execute files from the checkout **before** changing
+the revision. Record whether the backfill worker was active so it can be resumed explicitly. Once
+all writers are confirmed stopped, take the coordinated `DATA_DIR` snapshot and secret-managed
+configuration backup, then keep the services stopped through checkout and the wrapper's database
+backup:
+
+```bash
+sudo -u sightindex-deploy -H git -C /opt/sightindex rev-parse HEAD  # record rollback revision
+sudo systemctl is-active sightindex-attribute-backfill.service \
+  && BACKFILL_OPTION=--start-backfill || BACKFILL_OPTION=
+sudo systemctl disable --now sightindex-embedding.service 2>/dev/null || true
+sudo systemctl stop sightindex-attribute-backfill.service \
+  sightindex-api.service sightindex-reid.service 2>/dev/null || true
+for unit in sightindex-attribute-backfill sightindex-embedding sightindex-api sightindex-reid; do
+  if sudo systemctl is-active --quiet "$unit"; then
+    echo "failed to stop $unit" >&2
+    exit 1
+  fi
+done
+if sudo systemctl is-enabled --quiet sightindex-embedding.service; then
+  echo 'failed to disable sightindex-embedding' >&2
+  exit 1
+fi
+# Take the DATA_DIR snapshot here; do not restart any writer afterward.
+sudo -u sightindex-deploy -H git -C /opt/sightindex fetch --tags origin
+sudo -u sightindex-deploy -H git -C /opt/sightindex checkout --detach <reviewed-commit-or-tag>
+sudo -u sightindex-deploy -H git -C /opt/sightindex status --short
+sudo -u sightindex-deploy -H git -C /opt/sightindex rev-parse HEAD
+```
+
+On the first installation only, create and edit the RTX-specific environment file:
+
+```bash
+cd /opt/sightindex
+if ! sudo test -e .env; then
+  sudo install -o root -g sightindex -m 0640 \
+    deploy/rtx5090/sightindex.env.example .env
+  sudoedit .env
+fi
+```
+
+Never overwrite a live `.env` during an update. Review changes to the tracked template between the
+recorded old and new commits, then use `sudoedit .env` only for settings that must be adopted. Keep
+the real file in the deployment's secret/configuration backup; do not print its values in a diff or
+commit it.
+
+At minimum, replace `PUBLIC_BASE_URL` and `MINIO_ROOT_PASSWORD`. Keep the API, Milvus, and ReID
+listeners on loopback. Either configure application Basic Auth or make the TLS reverse proxy the
+documented authentication boundary. The installer rejects the tracked placeholder secret and a
+non-HTTPS public URL.
+
+Seed these operator-managed model assets before running the wrapper:
+
+```text
+/var/lib/sightindex/models/yolo11n.pt
+/var/lib/sightindex/models/insightface/models/buffalo_l/det_10g.onnx
+/var/lib/sightindex/models/insightface/models/buffalo_l/w600k_r50.onnx
+/var/lib/sightindex/models/sapiensid_wb12m/model.pth
+/var/lib/sightindex/models/sapiensid_wb12m/model.yaml
+/var/lib/sightindex/.cache/yolov8n-pose.pt
+```
+
+Make each file readable by `sightindex`. Review
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) before enabling SapiensID; its upstream code
+and weights are subject to non-commercial terms.
+
+For an update, take a filesystem or object-storage snapshot of `DATA_DIR` after all writers are
+stopped, as shown above. After the source revision is selected, the wrapper confirms the services
+remain inactive before changing runtime dependencies. It automatically backs up SQLite or the
+repository-managed PostgreSQL container, builds dependencies as the unprivileged deployment
+account, retains the previous virtual environment and frontend bundle, starts Milvus, then starts
+ReID and the API in dependency order.
+
+The optional `sightindex-embedding` service has a separate dependency profile and must be stopped
+and disabled before using this wrapper. Manage that service as a separate reviewed deployment if
+it is required.
+
+```bash
+cd /opt/sightindex
+sudo bash deploy/rtx5090/install_or_update.sh ${BACKFILL_OPTION:-}
+```
+
+ReID model warmup can take up to five minutes. Useful options are shown by:
+
+```bash
+bash deploy/rtx5090/install_or_update.sh --help
+```
+
+`--skip-backup` is an explicit acknowledgement that a separate database backup has already been
+verified. `--skip-deps` and `--skip-frontend` reuse artifacts only when every path is owned by
+`sightindex-deploy` and none is writable by `sightindex`; otherwise rebuild them.
+
+Run the verifier as the service identity so CUDA access, model readability, HOME, and `.env`
+permissions match the real process:
+
+```bash
+sudo -u sightindex -H bash /opt/sightindex/deploy/rtx5090/verify.sh
+```
+
+It checks systemd state, a real CUDA tensor operation, ReID model identity and readiness, a
+database-backed API, critical OpenAPI routes, Milvus write/search/delete, a synthetic InsightFace
+ONNX session, and the built `/reid` console. It does not prove that cameras are reachable or that
+new frames are advancing; verify that separately with a test stream and the external HTTPS URL.
+
+The dependency files use compatible version ranges rather than a hardware lockfile. Record
+`pip freeze`, the NVIDIA driver, Python, PyTorch, CUDA, ONNX Runtime, and model revisions for every
+accepted host image before treating it as a repeatable production baseline.
+
 ## 4. Start PostgreSQL
 
 The root Compose file runs PostgreSQL only. It reads `POSTGRES_DB`, `POSTGRES_USER`, and
@@ -151,11 +296,8 @@ sudo docker compose ps
 Wait for the health check:
 
 ```bash
-set -a
-. ./.env
-set +a
 until sudo docker compose exec -T postgres \
-  pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
+  sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'; do sleep 2; done
 ```
 
 Do not use the example password in a real deployment.
@@ -180,7 +322,7 @@ cd /opt/sightindex
 sudo docker compose --env-file .env -f deploy/milvus/docker-compose.yml config --quiet
 sudo docker compose --env-file .env -f deploy/milvus/docker-compose.yml up -d
 until curl --fail --silent http://127.0.0.1:9091/healthz; do sleep 3; done
-sudo -u sightindex -H sh -c 'cd /opt/sightindex && set -a && . ./.env && set +a && .venv/bin/python scripts/check_milvus.py'
+sudo -u sightindex -H sh -c 'cd /opt/sightindex && .venv/bin/python scripts/check_milvus.py'
 ```
 
 `scripts/check_milvus.py` writes, searches, validates, and removes a temporary vector. The HTTP
@@ -282,16 +424,18 @@ curl --fail http://127.0.0.1:8000/health
 business smoke test:
 
 ```bash
-curl --fail --user 'operator:YOUR_PASSWORD' \
+curl --fail --user operator \
   http://127.0.0.1:8000/api/media/counts
 ```
 
-If application Basic Auth is disabled behind a trusted local proxy, omit `--user`.
+With only the username supplied, curl prompts for the password instead of putting it in shell
+history or the process command line. If application Basic Auth is disabled behind a trusted local
+proxy, omit `--user`.
 
 For ReID, a `200` from the API status route is not enough; inspect the JSON fields:
 
 ```bash
-curl --fail --user 'operator:YOUR_PASSWORD' \
+curl --fail --user operator \
   http://127.0.0.1:8000/api/reid/status
 ```
 
@@ -326,7 +470,7 @@ before changing versions.
 2. Stop the API and optional workers.
 3. Back up PostgreSQL (or the SQLite file), `DATA_DIR`, and any non-rebuildable Milvus state.
 4. Fetch and check out the reviewed release commit.
-5. Reinstall pinned dependencies and rebuild `frontend/dist`.
+5. Install the reviewed dependency set and rebuild `frontend/dist`.
 6. Validate configuration and run tests.
 7. Start dependencies, model services, then the API.
 8. Run liveness, database, vector, and external smoke checks.
@@ -334,22 +478,35 @@ before changing versions.
 Example database backup:
 
 ```bash
+set -euo pipefail
 cd /opt/sightindex
-PREVIOUS_COMMIT=$(git rev-parse HEAD)
+PREVIOUS_COMMIT=$(sudo -u sightindex-deploy -H git -C /opt/sightindex rev-parse HEAD)
 BACKUP_DIR=/var/lib/sightindex/backups
 DATABASE_BACKUP="$BACKUP_DIR/sightindex-${PREVIOUS_COMMIT}.dump"
 DATA_BACKUP="$BACKUP_DIR/data-${PREVIOUS_COMMIT}.tar.gz"
-set -a
-. ./.env
-set +a
-sudo systemctl stop sightindex-api sightindex-attribute-backfill 2>/dev/null || true
+DATABASE_PARTIAL="${DATABASE_BACKUP}.partial"
+DATA_PARTIAL="${DATA_BACKUP}.partial"
+sudo systemctl stop sightindex-api sightindex-reid sightindex-embedding \
+  sightindex-attribute-backfill 2>/dev/null || true
+for unit in sightindex-api sightindex-reid sightindex-embedding sightindex-attribute-backfill; do
+  if sudo systemctl is-active --quiet "$unit"; then
+    echo "failed to stop $unit" >&2
+    exit 1
+  fi
+done
 sudo install -d -m 700 -o root -g root "$BACKUP_DIR"
-sudo install -m 600 /dev/null "$DATABASE_BACKUP"
-sudo install -m 600 /dev/null "$DATA_BACKUP"
-sudo docker compose exec -T postgres \
-  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc \
-  | sudo tee "$DATABASE_BACKUP" >/dev/null
-sudo tar -C /var/lib/sightindex -czf "$DATA_BACKUP" data
+sudo install -m 600 /dev/null "$DATABASE_PARTIAL"
+sudo install -m 600 /dev/null "$DATA_PARTIAL"
+sudo sh -c 'cd /opt/sightindex && docker compose --env-file .env exec -T postgres \
+  sh -c '\''pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc'\'' > "$1"' \
+  sh "$DATABASE_PARTIAL"
+sudo test -s "$DATABASE_PARTIAL"
+sudo sh -c 'cd /opt/sightindex && docker compose --env-file .env exec -T postgres \
+  pg_restore --list < "$1" >/dev/null' sh "$DATABASE_PARTIAL"
+sudo mv "$DATABASE_PARTIAL" "$DATABASE_BACKUP"
+sudo tar -C /var/lib/sightindex -czf "$DATA_PARTIAL" data
+sudo tar -tzf "$DATA_PARTIAL" >/dev/null
+sudo mv "$DATA_PARTIAL" "$DATA_BACKUP"
 ```
 
 Before running those commands, ensure the destination filesystem has enough free space and protect
@@ -376,6 +533,7 @@ because the old process starts successfully.
 - Do not expose PostgreSQL, Milvus, MinIO, ReID, embedding, reranker, or YOLO ports publicly.
 - Treat RTSP URLs, face embeddings, person crops, and model outputs as sensitive data.
 - Limit retention with `MEDIA_RETENTION_DAYS` and test cleanup in dry-run mode first.
-- Restrict `.env`, database backups, media directories, and model caches to the service account.
+- Restrict `.env`, database backups, media directories, and model caches to their documented
+  service, deployment, or root owner.
 - Do not log tokens, full RTSP URLs, or raw biometric payloads.
 - Review third-party model licenses before commercial or biometric use.

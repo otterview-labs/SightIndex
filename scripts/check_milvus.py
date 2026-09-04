@@ -50,6 +50,7 @@ def main() -> int:
         print("\nMILVUS_ENABLED is off, pymilvus is missing, or Milvus is in failure cooldown.")
         return 2
 
+    probe_id: uuid.UUID | None = None
     try:
         dim = index._embedding_dim(args.object_type)
         collection = index._collection_name(args.object_type)
@@ -78,13 +79,14 @@ def main() -> int:
         print(f"\nMilvus error: {exc}")
         return 1
     finally:
-        try:
-            index._collection(args.object_type).delete(
-                expr=f'object_id == "{probe_id}"',
-                timeout=settings.milvus_timeout_seconds,
-            )
-        except Exception:
-            pass
+        if probe_id is not None:
+            try:
+                index._collection(args.object_type).delete(
+                    expr=f'object_id == "{probe_id}"',
+                    timeout=settings.milvus_timeout_seconds,
+                )
+            except Exception:
+                pass
 
     print("\nMilvus round-trip passed.")
     return 0

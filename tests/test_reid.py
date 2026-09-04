@@ -192,9 +192,16 @@ def test_reid_attribute_filter_tolerates_one_conflict_and_rejects_two(
     assert [item.crop_id for item in filtered] == [one_conflict.id, unknown.id]
     assert items[0].attribute_agreement == pytest.approx(0.91 / 1.83)
     assert items[0].attribute_conflicts == ["upper_color"]
+    assert items[0].attribute_comparable_count == 2
+    assert items[0].attribute_match_count == 1
+    assert items[0].attribute_conflict_count == 1
     assert items[0].attribute_evidence_weight == 1.83
     assert items[0].attribute_conflict_weight == 0.92
+    assert items[1].attribute_comparable_count == 2
+    assert items[1].attribute_match_count == 0
+    assert items[1].attribute_conflict_count == 2
     assert items[2].attribute_agreement is None
+    assert items[2].attribute_comparable_count == 0
     assert bonuses[one_conflict.id] < 0
     assert bonuses[two_conflicts.id] < bonuses[one_conflict.id]
 

@@ -1941,6 +1941,21 @@ export interface components {
             attribute_matches?: string[];
             /** Attribute Conflicts */
             attribute_conflicts?: string[];
+            /**
+             * Attribute Comparable Count
+             * @default 0
+             */
+            attribute_comparable_count: number;
+            /**
+             * Attribute Match Count
+             * @default 0
+             */
+            attribute_match_count: number;
+            /**
+             * Attribute Conflict Count
+             * @default 0
+             */
+            attribute_conflict_count: number;
             /** Attribute Evidence Weight */
             attribute_evidence_weight?: number | null;
             /** Attribute Conflict Weight */
@@ -2035,6 +2050,21 @@ export interface components {
             attribute_matches?: string[];
             /** Attribute Conflicts */
             attribute_conflicts?: string[];
+            /**
+             * Attribute Comparable Count
+             * @default 0
+             */
+            attribute_comparable_count: number;
+            /**
+             * Attribute Match Count
+             * @default 0
+             */
+            attribute_match_count: number;
+            /**
+             * Attribute Conflict Count
+             * @default 0
+             */
+            attribute_conflict_count: number;
             /** Attribute Evidence Weight */
             attribute_evidence_weight?: number | null;
             /** Attribute Conflict Weight */

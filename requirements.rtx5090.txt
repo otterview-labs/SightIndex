@@ -1,0 +1,7 @@
+-r requirements.agx.txt
+-r requirements.face-cuda.txt
+
+# Unlike the Jetson path described in requirements.agx.txt, this x86_64 profile
+# installs PyTorch and torchvision into a fresh virtual environment through
+# deploy/rtx5090/install_or_update.sh. Keeping them out of this aggregate lets
+# the operator select the official CUDA wheel index for the installed driver.

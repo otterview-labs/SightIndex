@@ -41,6 +41,7 @@ data/diagnostics/*
 # Vue frontend: built at deploy time, never committed
 frontend/node_modules/
 frontend/dist/
+frontend/dist.*/
 frontend/*.tsbuildinfo
 
 # SapiensID weights: 1.5GB, fetched at deploy time

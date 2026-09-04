@@ -52,7 +52,7 @@ def wired(monkeypatch, tmp_path):
             db.commit()
             db.refresh(image)
 
-            def add(key, camera, minute):
+            def add(key, camera, minute, attributes=None):
                 (crops_dir / f"{key}.jpg").write_bytes(b"bytes")
                 crop = PersonCrop(
                     image_id=image.id,
@@ -60,6 +60,7 @@ def wired(monkeypatch, tmp_path):
                     bbox={"label": "person"},
                     camera_id=doors[camera],
                     captured_at=datetime(2026, 8, 24, 12, minute, 0),
+                    attributes=attributes,
                 )
                 db.add(crop)
                 db.commit()
@@ -67,10 +68,18 @@ def wired(monkeypatch, tmp_path):
                 ids[key] = crop.id
                 ObservationIndexService(db, get_settings()).upsert_crop(crop)
 
-            add("query", "产品部门口", 0)
+            black_clothes = {
+                "clothing": {
+                    "upper_color": "black",
+                    "lower_color": "black",
+                    "upper_color_confidence": 0.95,
+                    "lower_color_confidence": 0.92,
+                }
+            }
+            add("query", "产品部门口", 0, black_clothes)
             add("home_strong", "产品部门口", 1)
             add("b_weak", "项目部门口", 2)
-            add("b_best", "项目部门口", 3)
+            add("b_best", "项目部门口", 3, black_clothes)
             add("c_faint", "食堂", 4)
             db.commit()
         scores.update(
@@ -118,6 +127,20 @@ def test_the_response_says_where_the_query_came_from(wired):
 
     assert payload["camera_name"] == "产品部门口"
     assert payload["chance_ceiling"] == 0.44
+
+
+def test_camera_link_keeps_explainable_attribute_counts(wired):
+    """The link DTO must not discard counts already calculated for its label explanation."""
+
+    client, ids, _ = wired
+
+    links = client.post(f"/api/reid/crops/{ids['query']}/links").json()["links"]
+    project_door = next(link for link in links if link["camera_name"] == "项目部门口")
+
+    assert project_door["attribute_agreement"] == 1.0
+    assert project_door["attribute_comparable_count"] == 2
+    assert project_door["attribute_match_count"] == 2
+    assert project_door["attribute_conflict_count"] == 0
 
 
 def test_an_unknown_crop_is_a_404(wired):

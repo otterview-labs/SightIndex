@@ -32,6 +32,9 @@ def test_reid_attributes_report_stable_matches_and_conflicts():
 
     assert result.matched == ("backpack",)
     assert result.conflicted == ("upper_color", "lower_color")
+    assert result.compared_count == 3
+    assert result.match_count == 1
+    assert result.conflict_count == 2
     assert result.agreement == 1 / 3
 
 

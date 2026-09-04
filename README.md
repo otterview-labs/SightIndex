@@ -94,6 +94,13 @@ See [docs/deployment.md](docs/deployment.md) for:
 - health and business-level smoke checks;
 - upgrades, backups, and rollback.
 
+An RTX 5090 single-host profile is available under `deploy/rtx5090/`. Its wrapper builds a fresh
+CUDA environment, validates model assets, backs up local SQLite or the matching repository-managed
+PostgreSQL service, starts Milvus and systemd services in dependency order, and runs business-level
+smoke checks. External databases require a separately verified backup. The wrapper does not update
+the Git checkout for you; select and record a reviewed commit first, then follow the dedicated
+[RTX 5090 section](docs/deployment.md#automated-rtx-5090-profile).
+
 Jetson/AGX helper scripts live under `deploy/agx/`. Some optional YOLO and reranker helpers require
 an operator-supplied container image and model path; they are integrations, not bundled images.
 
@@ -211,6 +218,7 @@ tests/                 Backend tests
 deploy/milvus/         Local Milvus Compose stack
 deploy/systemd/        Linux service templates
 deploy/agx/            Optional Jetson/AGX and model-service helpers
+deploy/rtx5090/        RTX 5090 environment, deployment, and verification helpers
 docs/                  Architecture, API, calibration, and deployment notes
 scripts/               Maintenance, import, model, and diagnostic tools
 ```
