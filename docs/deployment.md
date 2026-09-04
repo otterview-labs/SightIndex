@@ -1,5 +1,7 @@
 # Deployment guide
 
+[English](deployment.md) | [简体中文](deployment.zh-CN.md)
+
 This guide describes the deployment assets that are actually present in this repository. The
 primary production path is a source build supervised by systemd. Docker Compose is used for
 PostgreSQL and, when enabled, Milvus. SightIndex does not currently include an application

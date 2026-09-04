@@ -1,5 +1,7 @@
 # SightIndex
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 SightIndex is a self-hosted visual indexing and retrieval service. It accepts images, videos, and
 RTSP/HTTP streams; extracts searchable media and person crops; and exposes the results through a
 FastAPI API and a Vue console.
@@ -85,7 +87,8 @@ The supported repository assets use a source build managed by systemd, with Post
 optionally Milvus managed by Docker Compose. The application itself does not currently ship a
 Dockerfile.
 
-See [docs/deployment.md](docs/deployment.md) for:
+See the deployment guide in [English](docs/deployment.md) or
+[简体中文](docs/deployment.zh-CN.md) for:
 
 - host preparation and dependency order;
 - environment ownership and secrets;

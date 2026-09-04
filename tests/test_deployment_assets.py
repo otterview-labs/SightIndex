@@ -114,3 +114,15 @@ def test_systemd_foreground_reid_does_not_need_repository_write_access() -> None
     foreground = launcher.index('if [ "${REID_SERVICE_FOREGROUND:-0}" = "1" ]')
     background_log_directory = launcher.index("mkdir -p logs")
     assert foreground < background_log_directory
+
+
+def test_public_documentation_has_language_switches() -> None:
+    readme_en = _read("README.md")
+    readme_zh = _read("README.zh-CN.md")
+    deployment_en = _read("docs/deployment.md")
+    deployment_zh = _read("docs/deployment.zh-CN.md")
+
+    assert "[简体中文](README.zh-CN.md)" in readme_en
+    assert "[English](README.md)" in readme_zh
+    assert "[简体中文](deployment.zh-CN.md)" in deployment_en
+    assert "[English](deployment.md)" in deployment_zh
