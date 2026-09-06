@@ -27,6 +27,7 @@ class FaceAlgorithmCandidate:
     bbox: dict[str, float]
     quality_score: float
     model: str
+    landmarks: list[list[float]] | None = None
 
 
 class InsightFaceCudaRecognizer:
@@ -133,6 +134,11 @@ class InsightFaceCudaRecognizer:
                     },
                     quality_score=float(getattr(face, "det_score", 0.0) or 0.0),
                     model=f"insightface-{self.model_name}",
+                    landmarks=(
+                        face.kps.tolist()
+                        if getattr(face, "kps", None) is not None
+                        else None
+                    ),
                 )
             )
         return candidates

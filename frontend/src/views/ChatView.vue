@@ -187,3 +187,9 @@ function usePrompt(prompt: string) {
     </aside>
   </main>
 </template>
+
+<style scoped>
+.chat-log-large {
+  scroll-behavior: smooth;
+}
+</style>

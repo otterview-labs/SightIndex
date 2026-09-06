@@ -18,6 +18,12 @@ class VLEmbedding(Base):
             "object_id",
             unique=True,
         ),
+        Index(
+            "ix_vl_embeddings_type_model_dim",
+            "object_type",
+            "embedding_model",
+            "embedding_dim",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
@@ -76,13 +82,13 @@ class FaceEmbedding(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     person_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("persons.id"), nullable=True
+        GUID(), ForeignKey("persons.id"), nullable=True, index=True
     )
     image_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("images.id"), nullable=True
+        GUID(), ForeignKey("images.id"), nullable=True, index=True
     )
     crop_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), ForeignKey("person_crops.id"), nullable=True
+        GUID(), ForeignKey("person_crops.id"), nullable=True, index=True
     )
     face_bbox: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
     embedding: Mapped[list[float] | None] = mapped_column(json_type(), nullable=True)
@@ -90,4 +96,33 @@ class FaceEmbedding(Base):
     quality_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CropFaceExtraction(Base):
+    """Cached strict (no-fallback) face extraction result for one crop.
+
+    ReID face-priority comparisons always extract crops with ``allow_fallback=False``, so a
+    cache hit under a matching ``signature`` is exactly what a fresh extraction would produce.
+    Negative results require a deterministic reason, matching input fingerprint and bounded
+    lifetime. Transient failures are not cached. Old unexplained negatives are retried lazily.
+    """
+
+    __tablename__ = "crop_face_extractions"
+
+    crop_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("person_crops.id"), primary_key=True
+    )
+    signature: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    absence_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    input_fingerprint: Mapped[str | None] = mapped_column(String, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(json_type(), nullable=True)
+    face_bbox: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
+    quality_score: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    face_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

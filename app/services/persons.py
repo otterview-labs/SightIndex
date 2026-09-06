@@ -650,19 +650,18 @@ class PersonService:
         person: Person,
         face_events: list[RecognitionEvent],
     ) -> list[TrajectoryVectorSeed]:
-        seeds: list[TrajectoryVectorSeed] = []
-        for crop in self._trajectory_seed_crops(
-            person,
-            face_events,
-            limit=self.settings.person_trajectory_vector_seed_limit,
-        ):
-            if path := self._resolve_data_url(crop.crop_url):
-                seeds.append(
-                    TrajectoryVectorSeed(
-                        path=path,
-                        min_score=self.settings.person_trajectory_vector_min_score,
-                    )
-                )
+        seeds: list[TrajectoryVectorSeed] = [
+            TrajectoryVectorSeed(
+                path=path,
+                min_score=self.settings.person_trajectory_vector_min_score,
+            )
+            for crop in self._trajectory_seed_crops(
+                person,
+                face_events,
+                limit=self.settings.person_trajectory_vector_seed_limit,
+            )
+            if (path := self._resolve_data_url(crop.crop_url))
+        ]
         if len(seeds) < self.settings.person_trajectory_vector_seed_limit:
             seeds.extend(
                 TrajectoryVectorSeed(

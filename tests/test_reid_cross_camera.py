@@ -3,10 +3,10 @@ import uuid
 
 import pytest
 
-from app.api.reid import _admit, _reserve_camera_slots
+from app.api.reid import _admit, _candidate_score_floor, _collapse, _reserve_camera_slots
 from app.config.settings import Settings
 from app.schemas.reid import ReidMatchItem
-from app.services.reid_index import ReidIndexService
+from app.services.reid_index import ReidIndexService, ReidMatch
 
 DOOR_A, DOOR_B, DOOR_C = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
@@ -47,6 +47,71 @@ def test_an_uploaded_photo_has_no_home_camera(settings):
     admitted = _admit([_item(DOOR_A, 0.45), _item(DOOR_B, 0.45)], settings, query_camera=None)
 
     assert len(admitted) == 2
+
+
+def test_a_reliable_face_can_rescue_a_candidate_below_the_body_bar(settings):
+    rescued = _item(DOOR_B, 0.34)
+    rescued.face_match = True
+    body_only = _item(DOOR_B, 0.34)
+
+    admitted = _admit([rescued, body_only], settings, query_camera=DOOR_A)
+
+    assert admitted == [rescued]
+
+
+def test_face_rescue_floor_only_expands_the_verification_pool(tmp_path):
+    enabled = Settings(
+        data_dir=tmp_path,
+        reid_min_score=0.5,
+        reid_min_score_cross_camera=0.45,
+        reid_face_priority_enabled=True,
+        reid_face_rescue_min_body_score=0.30,
+    )
+    disabled = enabled.model_copy(update={"reid_face_priority_enabled": False})
+
+    assert _candidate_score_floor(enabled) == 0.30
+    assert _candidate_score_floor(disabled) == 0.45
+
+
+def test_face_rescue_runs_before_final_body_admission(monkeypatch, tmp_path):
+    candidate = _item(DOOR_B, 0.34)
+    settings = Settings(
+        data_dir=tmp_path,
+        reid_min_score=0.5,
+        reid_min_score_cross_camera=0.45,
+        reid_face_priority_enabled=True,
+        reid_face_rescue_min_body_score=0.30,
+        reid_collapse_window_seconds=0,
+    )
+    # Some API tests reload ``app.*`` with an isolated database. Patch the exact function globals
+    # used by this collected reference, rather than whichever module instance is currently in
+    # sys.modules when the full suite reaches this test.
+    monkeypatch.setitem(
+        _collapse.__globals__,
+        "_to_items",
+        lambda _db, _settings, _matches: [candidate],
+    )
+
+    def confirm_face(_db, _settings, _query_crop, items, **_kwargs):
+        items[0].face_match = True
+        items[0].face_similarity = 0.82
+        items[0].face_reliability = 0.90
+
+    monkeypatch.setitem(_collapse.__globals__, "enrich_face_evidence", confirm_face)
+
+    results = _collapse(
+        None,
+        settings,
+        object(),
+        [ReidMatch(crop_id=candidate.crop_id, score=candidate.score)],
+        visits=10,
+        query_camera=DOOR_A,
+    )
+
+    assert [item.crop_id for item in results] == [candidate.crop_id]
+    assert results[0].face_match is True
+    assert results[0].occurrence_crop_ids == [candidate.crop_id]
+    assert results[0].evidence_level == "reliable"
 
 
 def test_a_weaker_camera_gets_seats_it_could_never_win_on_score():

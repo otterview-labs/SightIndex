@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 
 import { attributes as attributesApi, search as searchApi } from "@/api/client";
 import type { SearchFilters, SearchResultItem } from "@/api/types";
+import EmptyState from "@/components/EmptyState.vue";
 import SearchResultCard from "@/components/SearchResultCard.vue";
 import { useSummary } from "@/composables/useSummary";
 import { useToast } from "@/composables/useToast";
@@ -240,11 +241,12 @@ onMounted(async () => {
               <span class="result-mode">PERSON CROP</span>
             </div>
             <div class="question-results" aria-live="polite">
-              <div v-if="status === 'loading'" class="empty">{{ loadingLabel }}</div>
-              <div v-else-if="status === 'empty'" class="empty">
-                <strong>没有标签命中</strong>
-                请使用衣服颜色、帽子、眼镜、背包、手机、抽烟、跌倒或打架等明确标签。
-              </div>
+              <EmptyState v-if="status === 'loading'">{{ loadingLabel }}</EmptyState>
+              <EmptyState
+                v-else-if="status === 'empty'"
+                title="没有标签命中"
+                hint="请使用衣服颜色、帽子、眼镜、背包、手机、抽烟、跌倒或打架等明确标签。"
+              />
               <section v-for="group in groups" v-else :key="group.title" class="result-day-group">
                 <div class="result-day-head">
                   <strong>{{ group.title }}</strong>

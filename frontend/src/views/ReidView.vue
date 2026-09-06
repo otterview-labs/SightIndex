@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 import { crops as cropsApi, reid as reidApi } from "@/api/client";
 import type {
   PersonCropRead,
+  ReidCameraLink,
+  ReidFaceCoverage,
+  ReidFeedbackRead,
   ReidLinkResponse,
   ReidMatchItem,
   ReidStatusResponse,
 } from "@/api/types";
+import EmptyState from "@/components/EmptyState.vue";
 import FileField from "@/components/FileField.vue";
+import ReidFeedbackButtons from "@/components/ReidFeedbackButtons.vue";
+import ReidEvidenceSummary from "@/components/ReidEvidenceSummary.vue";
+import ReidFaceCoverageSummary from "@/components/ReidFaceCoverageSummary.vue";
 import { useToast } from "@/composables/useToast";
 import { fmtTime, formatScore, shortId } from "@/utils/format";
 
@@ -24,16 +31,35 @@ const sourceCrop = ref<PersonCropRead | null>(null);
 // Where else this person most likely went. Separate from the match list because it answers a
 // different question and is deliberately not threshold-gated.
 const cameraLinks = ref<ReidLinkResponse | null>(null);
+const showWeakCameraLinks = ref(false);
 const queryFile = ref<File | null>(null);
 const queryPreview = ref("");
 const results = ref<ReidMatchItem[] | null>(null);
+const resultsFaceCoverage = ref<ReidFaceCoverage | null>(null);
+// Non-null only when the visible result list was actually queried from this stored crop. An
+// uploaded file can coexist with a crop_id in the URL, but feedback must never be attached to the
+// old crop in that case.
+const resultsQueryCropId = ref<string | null>(null);
 const queryFrameCount = ref(1);
 const searching = ref(false);
 const rebuilding = ref(false);
 const enlargedImage = ref<{ src: string; alt: string; caption: string } | null>(null);
+const feedbackByCandidate = ref<Record<string, ReidFeedbackRead>>({});
+const feedbackSaving = ref<Set<string>>(new Set());
+const lightboxCloseButton = ref<HTMLButtonElement | null>(null);
+let lightboxTrigger: HTMLElement | null = null;
 let previousPageOverflow = "";
 let searchController: AbortController | null = null;
 let searchSequence = 0;
+let linksSequence = 0;
+// A new context invalidates ALL outstanding crop/links/feedback requests, even A → B → A.
+// A retry within the same context only advances searchSequence.
+let queryGeneration = 0;
+const activeQueryCropId = computed(() => queryFile.value ? null : sourceCropId.value);
+
+function isCurrentQuery(cropId: string, generation: number): boolean {
+  return generation === queryGeneration && activeQueryCropId.value === cropId;
+}
 
 const resultSummary = computed(() => {
   const items = results.value;
@@ -52,6 +78,109 @@ const coverage = computed(() => {
 
 const ready = computed(() => status.value?.ready ?? false);
 
+const credibleCameraLinks = computed(() =>
+  (cameraLinks.value?.links ?? []).filter(
+    (link) => link.face_match !== false && link.evidence_level !== "rejected"
+      && (link.beats_chance || link.face_match === true || link.evidence_level === "reliable"),
+  ),
+);
+
+const weakCameraLinks = computed(() =>
+  (cameraLinks.value?.links ?? []).filter(
+    (link) => link.face_match !== false && link.evidence_level !== "rejected"
+      && !link.beats_chance && link.face_match !== true && link.evidence_level !== "reliable",
+  ),
+);
+
+const visibleCameraLinks = computed(() =>
+  showWeakCameraLinks.value
+    ? [...credibleCameraLinks.value, ...weakCameraLinks.value]
+    : credibleCameraLinks.value,
+);
+
+const currentFeedbackCount = computed(() => Object.keys(feedbackByCandidate.value).length);
+
+function feedbackValue(candidateCropId: string): boolean | null {
+  return feedbackByCandidate.value[candidateCropId]?.same_person ?? null;
+}
+
+function feedbackIsSaving(candidateCropId: string): boolean {
+  return Boolean(
+    sourceCropId.value
+      && feedbackSaving.value.has(`${sourceCropId.value}:${candidateCropId}`),
+  );
+}
+
+async function loadFeedback(queryCropId: string) {
+  const generation = queryGeneration;
+  try {
+    const rows = await reidApi.feedback(queryCropId);
+    if (!isCurrentQuery(queryCropId, generation)) return;
+    // An initial GET can finish after a newly saved manual judgement. Keep the newer local row.
+    feedbackByCandidate.value = {
+      ...Object.fromEntries(rows.map((row) => [row.candidate_crop_id, row])),
+      ...feedbackByCandidate.value,
+    };
+  } catch (error) {
+    if (!isCurrentQuery(queryCropId, generation)) return;
+    showError(error);
+  }
+}
+
+async function saveFeedback(
+  candidate: ReidMatchItem | ReidCameraLink,
+  samePerson: boolean,
+  source: "search" | "camera_link",
+) {
+  const candidateCropId = candidate.crop_id;
+  const queryCropId = activeQueryCropId.value;
+  if (!queryCropId) return;
+  if (source === "search" && resultsQueryCropId.value !== queryCropId) return;
+  if (source === "camera_link" && !cameraLinks.value?.links.some((link) => link.crop_id === candidateCropId)) return;
+  const generation = queryGeneration;
+  const savingKey = `${queryCropId}:${candidateCropId}`;
+  if (feedbackSaving.value.has(savingKey)) return;
+  feedbackSaving.value = new Set(feedbackSaving.value).add(savingKey);
+  try {
+    const saved = await reidApi.saveFeedback({
+      query_crop_id: queryCropId,
+      candidate_crop_id: candidateCropId,
+      same_person: samePerson,
+      source,
+      body_score: candidate.score,
+      face_similarity: candidate.face_similarity,
+      face_reliability: candidate.face_reliability,
+      face_match: candidate.face_match,
+      attribute_agreement: candidate.attribute_agreement,
+      attribute_comparable_count: candidate.attribute_comparable_count,
+      attribute_match_count: candidate.attribute_match_count,
+      attribute_conflict_count: candidate.attribute_conflict_count,
+      fusion_score: candidate.fusion_score,
+      evidence_level: candidate.evidence_level as
+        | "reliable"
+        | "similar"
+        | "clue"
+        | "rejected"
+        | null
+        | undefined,
+      decision_reason: candidate.decision_reason,
+    });
+    if (isCurrentQuery(queryCropId, generation)) {
+      feedbackByCandidate.value = {
+        ...feedbackByCandidate.value,
+        [candidateCropId]: saved,
+      };
+      toast(samePerson ? "已记录：同一个人" : "已记录：不是同一个人");
+    }
+  } catch (error) {
+    if (isCurrentQuery(queryCropId, generation)) showError(error);
+  } finally {
+    const pending = new Set(feedbackSaving.value);
+    pending.delete(savingKey);
+    feedbackSaving.value = pending;
+  }
+}
+
 // Disabled buttons explain themselves on hover; an unexplained dead button reads as a bug.
 const notReadyTitle = computed(() => (ready.value ? "" : blockReason.value || "ReID 未就绪"));
 
@@ -59,60 +188,33 @@ const queryImage = computed(() => queryPreview.value || sourceCrop.value?.crop_u
 
 function enlargeImage(src: string | null | undefined, alt: string, caption: string) {
   if (!src) return;
-  previousPageOverflow = document.documentElement.style.overflow;
+  if (!enlargedImage.value) {
+    previousPageOverflow = document.documentElement.style.overflow;
+    lightboxTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   document.documentElement.style.overflow = "hidden";
   enlargedImage.value = { src, alt, caption };
+  void nextTick(() => lightboxCloseButton.value?.focus());
 }
 
 function closeEnlargedImage() {
   if (!enlargedImage.value) return;
   enlargedImage.value = null;
   document.documentElement.style.overflow = previousPageOverflow;
+  if (lightboxTrigger?.isConnected) lightboxTrigger.focus();
+  lightboxTrigger = null;
 }
 
 function onPreviewKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") closeEnlargedImage();
-}
-
-function fusedPriority(item: ReidMatchItem): number {
-  return item.fusion_score ?? item.score;
-}
-
-function evidenceLabel(level: string | null | undefined): string {
-  return level === "reliable" ? "可信" : level === "clue" ? "线索" : level === "rejected" ? "排除" : "相似";
-}
-
-function attributeEvidenceText(item: {
-  attribute_agreement?: number | null;
-  attribute_matches?: string[];
-  attribute_conflicts?: string[];
-  attribute_comparable_count?: number | null;
-  attribute_match_count?: number | null;
-}): string {
-  const agreement = item.attribute_agreement;
-  if (agreement === null || agreement === undefined) return "";
-  const compared = item.attribute_comparable_count
-    ?? (item.attribute_matches?.length ?? 0) + (item.attribute_conflicts?.length ?? 0);
-  if (compared < 2) return "";
-  if (!compared) return "";
-  const matched = item.attribute_match_count
-    ?? item.attribute_matches?.length
-    ?? 0;
-  const percentage = Math.round(agreement * 100);
-  return `高置信标签一致 ${matched}/${compared}（${percentage}%）`;
-}
-
-function faceEvidenceText(item: {
-  face_similarity?: number | null;
-  face_reliability?: number | null;
-  face_match?: boolean | null;
-}): string {
-  if (item.face_similarity === null || item.face_similarity === undefined) return "";
-  const similarity = Math.round(item.face_similarity * 100);
-  const reliability = Math.round((item.face_reliability ?? 0) * 100);
-  if (item.face_match === true) return `人脸吻合 ${similarity}% · 质量 ${reliability}%`;
-  if (item.face_match === false) return `人脸不一致 ${similarity}% · 质量 ${reliability}%`;
-  return `${reliability >= 70 ? "人脸不确定" : "人脸弱证据"} ${similarity}% · 质量 ${reliability}%`;
+  if (!enlargedImage.value) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeEnlargedImage();
+  } else if (event.key === "Tab") {
+    // The close button is the dialog's only interactive control.
+    event.preventDefault();
+    lightboxCloseButton.value?.focus();
+  }
 }
 
 // Every result repeats the camera when a search stays at one door, so say it once instead.
@@ -136,11 +238,9 @@ const resultGroups = computed(() => {
     group.frames += item.frame_count ?? 1;
     groups.set(key, group);
   }
-  // Strongest door first: it is the likeliest answer, and the order stays stable across searches.
-  return [...groups.values()].sort(
-    (a, b) =>
-      Math.max(...b.items.map(fusedPriority)) - Math.max(...a.items.map(fusedPriority)),
-  );
+  // First appearance follows the server's face-first ranking. Sorting numeric fusion_score
+  // again would put a strong body-only door ahead of a reliable matching face at another door.
+  return [...groups.values()];
 });
 
 function clockOf(value: string | null | undefined): string {
@@ -212,15 +312,18 @@ async function search() {
   searchController = controller;
   searching.value = true;
   results.value = null;
+  resultsFaceCoverage.value = null;
+  resultsQueryCropId.value = null;
   try {
     const body = new FormData();
     body.set("file", file);
     const response = await reidApi.search(body, undefined, controller.signal);
     if (sequence !== searchSequence || queryFile.value !== file) return;
     results.value = response.items;
+    resultsFaceCoverage.value = response.face_coverage ?? null;
     queryFrameCount.value = response.query_frame_count ?? 1;
     // Zero hits already shows as the empty state below; a toast on top would say it twice.
-    if (response.items.length) toast(`命中 ${response.items.length} 次出现`);
+    if (response.items.length) toast(`找到 ${response.items.length} 次候选出现，请核对图片`);
   } catch (error) {
     if (controller.signal.aborted || sequence !== searchSequence) return;
     showError(error);
@@ -253,39 +356,61 @@ async function rebuild() {
 }
 
 function onFileChange(file: File | null) {
+  ++queryGeneration;
   ++searchSequence;
   searchController?.abort();
   searchController = null;
   searching.value = false;
+  closeEnlargedImage();
+  queryFile.value = file;
   if (queryPreview.value) URL.revokeObjectURL(queryPreview.value);
   queryPreview.value = file ? URL.createObjectURL(file) : "";
   results.value = null;
+  resultsFaceCoverage.value = null;
+  resultsQueryCropId.value = null;
+  cameraLinks.value = null;
+  showWeakCameraLinks.value = false;
+  feedbackByCandidate.value = {};
   queryFrameCount.value = 1;
+  // Removing an upload explicitly restores the stored crop, including its own links/feedback.
+  if (!file) void activateSourceCrop(sourceCropId.value);
 }
 
 async function loadLinks(cropId: string) {
+  const generation = queryGeneration;
+  const sequence = ++linksSequence;
+  cameraLinks.value = null;
+  showWeakCameraLinks.value = false;
   try {
-    cameraLinks.value = await reidApi.links(cropId);
+    const response = await reidApi.links(cropId);
+    if (!isCurrentQuery(cropId, generation) || sequence !== linksSequence) return;
+    cameraLinks.value = response;
     queryFrameCount.value = Math.max(
       queryFrameCount.value,
-      cameraLinks.value.query_frame_count ?? 1,
+      response.query_frame_count ?? 1,
     );
   } catch {
-    cameraLinks.value = null; // the match list still stands on its own
+    if (isCurrentQuery(cropId, generation) && sequence === linksSequence) {
+      cameraLinks.value = null; // the match list still stands on its own
+    }
   }
 }
 
 async function searchByCrop(cropId: string) {
-  if (searching.value) return;
+  if (searching.value || activeQueryCropId.value !== cropId) return;
   const sequence = ++searchSequence;
   searching.value = true;
   results.value = null;
+  resultsFaceCoverage.value = null;
+  resultsQueryCropId.value = null;
   try {
     const response = await reidApi.similarToCrop(cropId);
     if (sequence !== searchSequence) return;
     results.value = response.items;
+    resultsFaceCoverage.value = response.face_coverage ?? null;
+    resultsQueryCropId.value = cropId;
     queryFrameCount.value = response.query_frame_count ?? 1;
-    if (response.items.length) toast(`命中 ${response.items.length} 次出现`);
+    if (response.items.length) toast(`找到 ${response.items.length} 次候选出现，请核对图片`);
   } catch (error) {
     if (sequence !== searchSequence) return;
     showError(error);
@@ -294,26 +419,61 @@ async function searchByCrop(cropId: string) {
   }
 }
 
-onMounted(async () => {
-  window.addEventListener("keydown", onPreviewKeydown);
-  await loadStatus();
-  const requested = route.query.crop_id;
-  const cropId = Array.isArray(requested) ? requested[0] : requested;
-  if (!cropId) return;
+function routeCropId(value: unknown): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first ? first : null;
+}
+
+async function activateSourceCrop(cropId: string | null) {
+  const generation = ++queryGeneration;
+  closeEnlargedImage();
+  ++searchSequence;
+  searchController?.abort();
+  searchController = null;
+  searching.value = false;
   sourceCropId.value = cropId;
+  sourceCrop.value = null;
+  cameraLinks.value = null;
+  results.value = null;
+  resultsFaceCoverage.value = null;
+  resultsQueryCropId.value = null;
+  queryFrameCount.value = 1;
+  feedbackByCandidate.value = {};
+  showWeakCameraLinks.value = false;
+  if (queryPreview.value) URL.revokeObjectURL(queryPreview.value);
+  queryPreview.value = "";
+  queryFile.value = null;
+  if (!cropId) return;
+
   cropsApi
     .get(cropId)
     .then((crop) => {
-      sourceCrop.value = crop;
+      if (isCurrentQuery(cropId, generation)) sourceCrop.value = crop;
     })
     .catch(() => {
-      sourceCrop.value = null; // the id still shows; only the thumbnail is lost
+      if (isCurrentQuery(cropId, generation)) sourceCrop.value = null;
     });
-  if (ready.value) {
-    await Promise.all([searchByCrop(cropId), loadLinks(cropId)]);
-  }
+  const requests: Promise<unknown>[] = [loadFeedback(cropId)];
+  if (ready.value) requests.push(searchByCrop(cropId), loadLinks(cropId));
+  await Promise.all(requests);
+}
+
+onMounted(async () => {
+  const generation = queryGeneration;
+  window.addEventListener("keydown", onPreviewKeydown);
+  await loadStatus();
+  if (generation === queryGeneration) await activateSourceCrop(routeCropId(route.query.crop_id));
 });
+watch(
+  () => route.query.crop_id,
+  async (requested) => {
+    const cropId = routeCropId(requested);
+    if (cropId === sourceCropId.value) return;
+    await activateSourceCrop(cropId);
+  },
+);
 onBeforeUnmount(() => {
+  ++queryGeneration;
   window.removeEventListener("keydown", onPreviewKeydown);
   if (enlargedImage.value) document.documentElement.style.overflow = previousPageOverflow;
   ++searchSequence;
@@ -363,7 +523,7 @@ onBeforeUnmount(() => {
           :class="status.face_priority_ready ? 'status-pill ok' : 'status-pill'"
           :title="status.face_priority_error || ''"
         >
-          <i aria-hidden="true"></i>{{ status.face_priority_ready ? "人脸优先" : "人脸降级" }}
+          <i aria-hidden="true"></i>{{ status.face_priority_ready ? "人脸模型就绪" : "人脸模型不可用" }}
         </span>
         <span v-if="status.pending_crops > 0" class="reid-backlog">积压 {{ status.pending_crops }}</span>
         <!-- Fingerprints matter when something is wrong, and never otherwise; they were taking
@@ -391,7 +551,7 @@ onBeforeUnmount(() => {
       <div class="section-head">
         <div>
           <h2 id="reidQueryTitle">查询</h2>
-          <p>按摄像头组织候选，高置信标签先过滤；检测到可靠人脸时优先使用人脸证据。</p>
+          <p>先看图片，再核对证据。可靠人脸优先，标签辅助判断；相似分数不是身份确认。</p>
         </div>
       </div>
 
@@ -405,7 +565,7 @@ onBeforeUnmount(() => {
             enlargeImage(
               queryImage,
               '查询图',
-              sourceCropId ? `查询图 · crop ${shortId(sourceCropId)}` : '上传的查询图',
+              activeQueryCropId ? `查询图 · crop ${shortId(activeQueryCropId)}` : '上传的查询图',
             )
           "
         >
@@ -413,7 +573,7 @@ onBeforeUnmount(() => {
           <span class="image-zoom-hint" aria-hidden="true">放大</span>
         </button>
         <figcaption>
-          <span v-if="sourceCropId">来自观察表 · crop {{ shortId(sourceCropId) }}</span>
+          <span v-if="activeQueryCropId">来自观察表 · crop {{ shortId(activeQueryCropId) }}</span>
           <span v-else>已选择的上传图</span>
           <span v-if="queryFrameCount > 1" class="status-pill ok">
             <i aria-hidden="true"></i>{{ queryFrameCount }} 帧联合检索
@@ -422,12 +582,12 @@ onBeforeUnmount(() => {
       </figure>
 
       <button
-        v-if="sourceCropId"
+        v-if="activeQueryCropId"
         class="button ghost wide"
         type="button"
         :disabled="searching || !ready"
         :title="notReadyTitle || (searching ? '检索进行中，请稍候' : '用这张裁剪重新检索')"
-        @click="searchByCrop(sourceCropId)"
+        @click="searchByCrop(activeQueryCropId)"
       >
         {{ searching ? "检索中" : "重新检索" }}
       </button>
@@ -456,21 +616,37 @@ onBeforeUnmount(() => {
     </section>
 
     <section
-      v-if="cameraLinks && cameraLinks.links.length"
+      v-if="cameraLinks"
       class="panel reid-links"
       aria-labelledby="reidLinksTitle"
     >
       <div class="section-head">
         <div>
-          <h2 id="reidLinksTitle">去过哪些门</h2>
+          <h2 id="reidLinksTitle">跨摄像头线索</h2>
           <p>
-            每个其他摄像头最像的一次，不设阈值。真实跨门匹配约 0.43–0.48，而巧合能到
-            {{ cameraLinks.chance_ceiling.toFixed(2) }}，所以低于它的只作线索。
+            每个其他摄像头的一条候选，不代表确认到访。人体分低于参考线
+            {{ cameraLinks.chance_ceiling.toFixed(2) }} 且无更强证据的线索默认收起。
           </p>
         </div>
+        <button
+          v-if="weakCameraLinks.length"
+          class="button ghost reid-weak-toggle"
+          type="button"
+          :aria-expanded="showWeakCameraLinks"
+          @click="showWeakCameraLinks = !showWeakCameraLinks"
+        >
+          {{ showWeakCameraLinks ? "隐藏低置信线索" : `查看低置信线索（${weakCameraLinks.length}）` }}
+        </button>
       </div>
-      <ul class="reid-link-list">
-        <li v-for="link in cameraLinks.links" :key="link.crop_id">
+      <ReidFaceCoverageSummary :coverage="cameraLinks.face_coverage" scope="links" />
+      <EmptyState
+        v-if="!credibleCameraLinks.length && !showWeakCameraLinks"
+        class="reid-link-empty"
+        title="暂无优先核对的跨摄像头候选"
+        :hint="weakCameraLinks.length ? '其他摄像头仍有最佳候选，但人体分数处于巧合区间，可按需展开核对。' : '本次没有可展示的跨摄像头线索；这不等于确认没有到访。'"
+      />
+      <ul v-if="visibleCameraLinks.length" class="reid-link-list">
+        <li v-for="link in visibleCameraLinks" :key="link.crop_id">
           <button
             v-if="link.crop_url"
             class="image-zoom-trigger reid-link-image"
@@ -492,38 +668,21 @@ onBeforeUnmount(() => {
           <div class="reid-link-meta">
             <strong>{{ link.camera_name || "未知摄像头" }}</strong>
             <span>{{ link.location_name }}</span>
-            <span>{{ link.captured_at ? fmtTime(link.captured_at) : "无时间" }}</span>
-            <span :class="link.beats_chance ? 'status-pill ok' : 'status-pill'">
-              <i aria-hidden="true"></i>{{ formatScore(link.score) }}
-              {{ link.beats_chance ? "高于巧合" : "巧合可解释" }}
-            </span>
-            <span class="status-pill" :class="{ ok: link.evidence_level === 'reliable' }"
-                  :title="link.decision_reason || ''">
-              <i aria-hidden="true"></i>{{ evidenceLabel(link.evidence_level) }} · {{ link.decision_reason }}
-            </span>
-            <!-- Shown only when both sides were measurable, so an absent pill means "not known"
-                 rather than "did not match". -->
-            <span v-if="link.stature_agreement !== null && link.stature_agreement !== undefined"
-                  class="status-pill">
-              <i aria-hidden="true"></i>身高吻合 {{ Math.round(link.stature_agreement * 100) }}%
-            </span>
-            <span v-if="link.attribute_agreement !== null && link.attribute_agreement !== undefined"
-                  class="status-pill">
-              <i aria-hidden="true"></i>{{ attributeEvidenceText(link) }}
-            </span>
-            <span v-if="link.face_match === true" class="status-pill ok">
-              <i aria-hidden="true"></i>{{ faceEvidenceText(link) }}
-            </span>
-            <span v-else-if="link.face_match === false" class="status-pill">
-              <i aria-hidden="true"></i>{{ faceEvidenceText(link) }}
-            </span>
-            <span v-else-if="link.face_similarity !== null && link.face_similarity !== undefined"
-                  class="status-pill">
-              <i aria-hidden="true"></i>{{ faceEvidenceText(link) }}
-            </span>
+            <ReidEvidenceSummary
+              :item="link"
+              :when="link.captured_at ? fmtTime(link.captured_at) : ''"
+              :confirmed="feedbackValue(link.crop_id)"
+              show-score
+            />
             <RouterLink class="reid-link-query" :to="{ path: '/reid', query: { crop_id: link.crop_id } }">
               用这张图检索
             </RouterLink>
+            <ReidFeedbackButtons
+              v-if="activeQueryCropId"
+              :value="feedbackValue(link.crop_id)"
+              :saving="feedbackIsSaving(link.crop_id)"
+              @choose="saveFeedback(link, $event, 'camera_link')"
+            />
           </div>
         </li>
       </ul>
@@ -532,24 +691,42 @@ onBeforeUnmount(() => {
     <section class="panel reid-results" aria-labelledby="reidResultsTitle">
       <div class="section-head">
         <div>
-          <h2 id="reidResultsTitle">匹配结果</h2>
+          <h2 id="reidResultsTitle">检索候选</h2>
         </div>
-        <span v-if="results" class="source-count">{{ resultSummary }}</span>
+        <div class="reid-result-actions">
+          <span v-if="results" class="source-count">{{ resultSummary }}</span>
+          <a
+            v-if="activeQueryCropId"
+            class="button ghost reid-export"
+            href="/api/reid/feedback/export.csv"
+            download="reid-feedback.csv"
+          >
+            导出全部标注
+          </a>
+        </div>
       </div>
+
+      <ReidFaceCoverageSummary v-if="results !== null" :coverage="resultsFaceCoverage" scope="search" />
+
+      <p v-if="activeQueryCropId" class="reid-feedback-help">
+        看清候选后可人工确认，本次已标注 {{ currentFeedbackCount }} 条；标注只用于后续校准，当前不会改变排序。
+      </p>
+      <p v-else-if="results" class="reid-feedback-help">
+        上传图没有可追溯的查询 crop；从观察表进入「找相似」后即可标注候选。
+      </p>
 
       <p v-if="singleDay" class="reid-scope">{{ singleDay }}</p>
 
       <!-- The live region has to exist before its content changes, or screen readers stay
            silent -- so the wrapper is unconditional and only its children switch. -->
       <div class="reid-search-state" aria-live="polite">
-        <div v-if="searching" class="empty"><strong>检索中</strong></div>
-        <div v-else-if="results === null" class="empty"><strong>还没有检索</strong></div>
-        <div v-else-if="!results.length" class="empty">
-          <strong>没有可信匹配</strong>
-          <p class="muted-text">
-            可以试试：换一张头到脚完整、光线清晰的单人全身图；或先点右上角「重建索引」补齐覆盖后再检索。
-          </p>
-        </div>
+        <EmptyState v-if="searching" title="检索中" />
+        <EmptyState v-else-if="results === null" title="还没有检索" />
+        <EmptyState
+          v-else-if="!results.length"
+          title="没有达到筛选条件的候选"
+          hint="可以试试：换一张头到脚完整、光线清晰的单人全身图；或先点右上角「重建索引」补齐覆盖后再检索。"
+        />
       </div>
       <template v-if="results && results.length">
         <section v-for="group in resultGroups" :key="group.key" class="reid-camera-group">
@@ -560,61 +737,46 @@ onBeforeUnmount(() => {
           </h3>
           <div class="media-grid">
             <article v-for="item in group.items" :key="item.crop_id" class="media-item">
-          <!-- The score overlays the image, so it needs the image as its containing block, not
-               the card -- anchored to the card it lands on top of the button. -->
           <div class="reid-thumb">
             <button
               v-if="item.crop_url || item.image_url"
               class="image-zoom-trigger"
               type="button"
-              aria-label="放大查看匹配裁剪"
+              aria-label="放大查看候选裁剪"
               title="点击放大"
               @click="
                 enlargeImage(
                   item.crop_url || item.image_url,
-                  '匹配裁剪',
+                  '候选裁剪',
                   `${item.camera_name || '未知摄像头'} · crop ${shortId(item.crop_id)} · 相似度 ${formatScore(item.score)}`,
                 )
               "
             >
               <img
                 :src="item.crop_url || item.image_url || undefined"
-                alt="匹配裁剪"
+                alt="候选裁剪"
                 loading="lazy"
               />
               <span class="image-zoom-hint" aria-hidden="true">放大</span>
             </button>
             <div v-else class="media-thumb-missing">图缺失</div>
-            <div class="reid-score" :title="`相似度 ${formatScore(item.score)}`">
+            <div class="reid-score" title="人体向量相似度，不是同人概率">
+              <span>人体相似度</span>
               <b>{{ formatScore(item.score) }}</b>
-              <!-- A ranked list is easier to read down than across; the bar is the ranking. -->
-              <i aria-hidden="true" :style="{ '--fill': `${Math.round(item.score * 100)}%` }"></i>
             </div>
           </div>
           <div class="media-meta">
-            <strong v-if="item.person_name">{{ item.person_name }}</strong>
-            <span>{{ visitWhen(item) }}</span>
-            <span class="mono-id">crop {{ shortId(item.crop_id) }}</span>
-            <span class="status-pill" :class="{ ok: item.evidence_level === 'reliable' }"
-                  :title="item.decision_reason || ''">
-              <i aria-hidden="true"></i>{{ evidenceLabel(item.evidence_level) }} · {{ item.decision_reason }}
-            </span>
-            <span
-              v-if="item.attribute_agreement !== null && item.attribute_agreement !== undefined"
-              class="status-pill"
-            >
-              <i aria-hidden="true"></i>{{ attributeEvidenceText(item) }}
-            </span>
-            <span v-if="item.face_match === true" class="status-pill ok">
-              <i aria-hidden="true"></i>{{ faceEvidenceText(item) }}
-            </span>
-            <span v-else-if="item.face_match === false" class="status-pill">
-              <i aria-hidden="true"></i>{{ faceEvidenceText(item) }}
-            </span>
-            <span v-else-if="item.face_similarity !== null && item.face_similarity !== undefined"
-                  class="status-pill">
-              <i aria-hidden="true"></i>{{ faceEvidenceText(item) }}
-            </span>
+            <ReidEvidenceSummary
+              :item="item"
+              :when="visitWhen(item)"
+              :confirmed="resultsQueryCropId === activeQueryCropId && activeQueryCropId ? feedbackValue(item.crop_id) : null"
+            />
+            <ReidFeedbackButtons
+              v-if="resultsQueryCropId === activeQueryCropId && resultsQueryCropId"
+              :value="feedbackValue(item.crop_id)"
+              :saving="feedbackIsSaving(item.crop_id)"
+              @choose="saveFeedback(item, $event, 'search')"
+            />
           </div>
             </article>
           </div>
@@ -632,11 +794,11 @@ onBeforeUnmount(() => {
         @click.self="closeEnlargedImage"
       >
         <button
+          ref="lightboxCloseButton"
           class="image-lightbox-close"
           type="button"
           aria-label="关闭图片预览"
           title="关闭（Esc）"
-          autofocus
           @click="closeEnlargedImage"
         >
           ×
@@ -670,6 +832,43 @@ onBeforeUnmount(() => {
   margin: 4px 0 0;
 }
 
+.reid-weak-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.reid-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.reid-export {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.reid-feedback-help {
+  margin: -2px 0 14px;
+  color: var(--muted, #667085);
+  font-size: 12px;
+}
+
+.reid-link-empty {
+  padding: 18px;
+  border: 1px dashed var(--line, #dbe3ea);
+  border-radius: 10px;
+  background: var(--surface-soft, #f4f7fa);
+}
+
+.reid-link-empty p {
+  margin: 6px 0 0;
+}
+
 /* 上传到结果的视觉连续性：查询图、跨门候选图和结果缩略图共用同一套圆角描边，
    让"这张图"到"这些匹配"读起来是同一条链路。 */
 .reid-query-figure img,
@@ -693,7 +892,7 @@ onBeforeUnmount(() => {
 }
 
 .image-zoom-trigger:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--primary, #246bfd) 45%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--accent, #246bfd) 45%, transparent);
   outline-offset: 3px;
 }
 
@@ -724,18 +923,90 @@ onBeforeUnmount(() => {
 
 .reid-query-figure img {
   display: block;
-  width: min(100%, 220px);
-  height: 220px;
-  max-height: 220px;
+  width: 100%;
+  height: 280px;
+  max-height: none;
   object-fit: contain;
   background: var(--surface-soft, #f4f7fa);
 }
+
+.reid-query-figure .image-zoom-trigger {
+  width: 100%;
+}
+
+.reid-query-figure figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted, #667085);
+  font-size: 12px;
+}
+
+.reid-results .media-grid {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  max-height: none;
+  min-height: 0;
+  overflow: visible;
+  align-items: start;
+  gap: 14px;
+  padding: 0;
+}
+
+.reid-results .media-item {
+  min-width: 0;
+  border-radius: 10px;
+}
+
+.reid-thumb {
+  position: relative;
+  height: 240px;
+  background: var(--surface-soft, #f4f7fa);
+}
+
+.reid-thumb .image-zoom-trigger,
+.reid-thumb img,
+.reid-thumb .media-thumb-missing {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
+.reid-score {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: rgb(13 22 34 / 82%);
+  color: #fff;
+  pointer-events: none;
+}
+
+.reid-score span { font-size: 10px; }
+.reid-score b { font-size: 17px; font-variant-numeric: tabular-nums; }
+
+.reid-results .media-meta {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.reid-camera-group + .reid-camera-group { margin-top: 24px; }
+.reid-camera-group h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 14px; }
+.reid-camera-group h3 small,
+.reid-camera-group h3 em { color: var(--muted, #667085); font-size: 12px; font-weight: 400; font-style: normal; }
 
 /* Cross-camera candidates are person crops, not full-width evidence images. Keep every card on
    the same portrait canvas so a tall source file cannot stretch the whole page. */
 .reid-link-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   gap: 10px;
   margin: 0;
   padding: 0;
@@ -744,7 +1015,7 @@ onBeforeUnmount(() => {
 
 .reid-link-list > li {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   padding: 10px;
@@ -755,8 +1026,8 @@ onBeforeUnmount(() => {
 
 .reid-link-image {
   display: block;
-  width: 96px;
-  height: 128px;
+  width: 112px;
+  height: 168px;
   overflow: hidden;
   border-radius: 10px;
   background: var(--surface-soft, #f4f7fa);
@@ -764,7 +1035,7 @@ onBeforeUnmount(() => {
 
 .reid-link-query {
   margin-top: 2px;
-  color: var(--primary, #246bfd);
+  color: var(--accent, #246bfd);
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
@@ -858,7 +1129,19 @@ onBeforeUnmount(() => {
 .image-lightbox-close:hover,
 .image-lightbox-close:focus-visible {
   background: rgb(255 255 255 / 22%);
-  outline: none;
+}
+
+.image-lightbox-close:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
+@media (max-width: 1024px) {
+  .reid-query { position: static; }
+}
+
+@media (hover: none) {
+  .image-zoom-hint { opacity: 1; transform: none; }
 }
 
 @media (max-width: 640px) {
@@ -867,13 +1150,20 @@ onBeforeUnmount(() => {
   }
 
   .reid-query-figure img {
-    width: min(100%, 160px);
-    height: 160px;
-    max-height: 160px;
+    height: 220px;
   }
 
   .reid-link-list {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .reid-results .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .reid-thumb { height: 220px; }
+}
+
+@media (max-width: 400px) {
+  .reid-results .media-grid { grid-template-columns: minmax(0, 1fr); }
+  .reid-link-list > li { grid-template-columns: 88px minmax(0, 1fr); gap: 10px; }
+  .reid-link-image { width: 88px; height: 132px; }
 }
 </style>

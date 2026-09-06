@@ -3,7 +3,7 @@ import shutil
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -12,8 +12,8 @@ from app.config.settings import Settings, get_settings
 from app.db.session import SessionLocal
 from app.models.media import Image, VideoStream
 from app.services.appearance_tracker import AppearanceTracker
+from app.services.capture_process import CaptureProcess
 from app.services.frame_processing import Detection, FrameProcessingService
-from app.services.opencv_capture import open_video_capture
 from app.services.time_utils import local_now
 from app.services.vector_index_queue import VectorQueueFullError
 from app.services.video_processing import CountingLine, PersonTrack, VideoProcessingService
@@ -25,6 +25,7 @@ class StreamRuntime:
     def __init__(self) -> None:
         self._stop_events: dict[uuid.UUID, threading.Event] = {}
         self._threads: dict[uuid.UUID, threading.Thread] = {}
+        self._restart_on_shutdown: set[uuid.UUID] = set()
         self._lock = threading.Lock()
 
     def is_running(self, stream_id: uuid.UUID) -> bool:
@@ -36,6 +37,7 @@ class StreamRuntime:
             if self.is_running(stream_id):
                 return "already running"
             stop_event = threading.Event()
+            self._restart_on_shutdown.discard(stream_id)
             thread = threading.Thread(
                 target=self._run_capture_loop,
                 args=(stream_id, stop_event),
@@ -52,6 +54,7 @@ class StreamRuntime:
             stop_event = self._stop_events.get(stream_id)
             if stop_event is None:
                 return "not running"
+            self._restart_on_shutdown.discard(stream_id)
             stop_event.set()
             return "stopping"
 
@@ -62,6 +65,27 @@ class StreamRuntime:
             return True
         thread.join(timeout=max(timeout_seconds, 0.0))
         return not thread.is_alive()
+
+    def stop_all(self) -> None:
+        with self._lock:
+            restarting = [
+                stream_id
+                for stream_id, thread in self._threads.items()
+                if thread.is_alive() and not self._stop_events[stream_id].is_set()
+            ]
+            self._restart_on_shutdown.update(restarting)
+            for event in self._stop_events.values():
+                event.set()
+            threads = list(self._threads.values())
+        for thread in threads:
+            thread.join(timeout=3)
+        # An API upgrade is not a user request to disable the cameras. Preserve autostart.
+        with SessionLocal() as db:
+            for stream_id in restarting:
+                stream = db.get(VideoStream, stream_id)
+                if stream is not None:
+                    stream.status = "starting"
+            db.commit()
 
     def _run_capture_loop(self, stream_id: uuid.UUID, stop_event: threading.Event) -> None:
         try:
@@ -78,7 +102,7 @@ class StreamRuntime:
                 return
             reconnect_interval = stream.reconnect_interval_seconds
             settings = get_settings()
-            stream.status = "running"
+            stream.status = "starting"
             stream.last_error = None
             stream.started_at = stream.started_at or local_now(settings)
             db.commit()
@@ -96,29 +120,54 @@ class StreamRuntime:
             warmup_frames_remaining = int(settings.stream_warmup_frames)
             last_diagnostic_at = 0.0
             queue_backpressure_failures = 0
-
-            capture = open_video_capture(cv2, stream.stream_url, settings)
-            if not capture.isOpened():
+            last_read_heartbeat = float("-inf")
+            capture = None
+            try:
+                capture = CaptureProcess(stream.stream_url, settings, stop_event)
+            except InterruptedError:
+                db.close()
+                break
+            except (OSError, EOFError):
+                pass
+            if capture is None or not capture.isOpened():
+                stream.consecutive_read_failures += 1
                 self._set_stream_error(
                     db,
                     stream,
-                    f"Could not open stream: {stream.stream_url}",
+                    "Could not open stream within the configured timeout",
                     status="error",
                 )
                 db.close()
-                time.sleep(reconnect_interval)
+                stop_event.wait(reconnect_interval)
                 continue
-
             try:
                 while not stop_event.is_set():
-                    ok, frame = capture.read()
-                    if not ok:
-                        self._set_stream_error(db, stream, "Failed to read frame", status="error")
+                    read_timed_out = False
+                    try:
+                        ok, frame = capture.read()
+                    except InterruptedError:
                         break
+                    except (OSError, EOFError):
+                        ok, frame = False, None
+                        read_timed_out = True
+                    if not ok:
+                        stream.consecutive_read_failures += 1
+                        reason = (
+                            "Frame read timed out" if read_timed_out else "Failed to read frame"
+                        )
+                        self._set_stream_error(db, stream, reason, status="error")
+                        break
+                    if time.monotonic() - last_read_heartbeat >= 5:
+                        stream.last_frame_read_at = datetime.now(UTC)
+                        stream.consecutive_read_failures = 0
+                        stream.status = "running"
+                        stream.last_error = None
+                        db.commit()
+                        last_read_heartbeat = time.monotonic()
                     settings = get_settings()
                     if warmup_frames_remaining > 0:
                         warmup_frames_remaining -= 1
-                        time.sleep(stream.frame_interval_seconds)
+                        stop_event.wait(stream.frame_interval_seconds)
                         continue
                     is_usable, frame_reference = self._usable_frame_reference(
                         frame,
@@ -138,7 +187,7 @@ class StreamRuntime:
                             reason="corrupt_frame_skipped",
                             counting_line_set=counting_line is not None,
                         )
-                        time.sleep(stream.frame_interval_seconds)
+                        stop_event.wait(stream.frame_interval_seconds)
                         continue
                     previous_frame_reference = (
                         frame_reference if frame_reference is not None else previous_frame_reference
@@ -190,7 +239,7 @@ class StreamRuntime:
                                 frame_path=frame_path,
                             )
                             frame_path.unlink(missing_ok=True)
-                            time.sleep(stream.frame_interval_seconds)
+                            stop_event.wait(stream.frame_interval_seconds)
                             continue
 
                         image = self._create_frame_image(db, stream, frame_url, captured_at)
@@ -203,20 +252,18 @@ class StreamRuntime:
                             tracks = tracks_before_crossing
                             next_track_id = next_track_id_before_crossing
                             queue_backpressure_failures += 1
-                            last_diagnostic_at, backoff_seconds = (
-                                self._handle_vector_queue_full(
-                                    db=db,
-                                    stream=stream,
-                                    settings=settings,
-                                    captured_at=captured_at,
-                                    last_diagnostic_at=last_diagnostic_at,
-                                    frame_path=frame_path,
-                                    raw_detections=len(raw_detections),
-                                    quality_detections=len(detections),
-                                    crossings=len(crossings),
-                                    failures=queue_backpressure_failures,
-                                    error=exc,
-                                )
+                            last_diagnostic_at, backoff_seconds = self._handle_vector_queue_full(
+                                db=db,
+                                stream=stream,
+                                settings=settings,
+                                captured_at=captured_at,
+                                last_diagnostic_at=last_diagnostic_at,
+                                frame_path=frame_path,
+                                raw_detections=len(raw_detections),
+                                quality_detections=len(detections),
+                                crossings=len(crossings),
+                                failures=queue_backpressure_failures,
+                                error=exc,
                             )
                             stop_event.wait(backoff_seconds)
                             continue
@@ -272,7 +319,7 @@ class StreamRuntime:
                                     frame_path=frame_path,
                                 )
                                 frame_path.unlink(missing_ok=True)
-                                time.sleep(stream.frame_interval_seconds)
+                                stop_event.wait(stream.frame_interval_seconds)
                                 continue
                         image = self._create_frame_image(db, stream, frame_url, captured_at)
                         try:
@@ -281,20 +328,18 @@ class StreamRuntime:
                             # This frame is being dropped, so its visits were never stored.
                             visits.restore(visits_before_frame)
                             queue_backpressure_failures += 1
-                            last_diagnostic_at, backoff_seconds = (
-                                self._handle_vector_queue_full(
-                                    db=db,
-                                    stream=stream,
-                                    settings=settings,
-                                    captured_at=captured_at,
-                                    last_diagnostic_at=last_diagnostic_at,
-                                    frame_path=frame_path,
-                                    raw_detections=len(raw_detections),
-                                    quality_detections=len(detections),
-                                    crossings=0,
-                                    failures=queue_backpressure_failures,
-                                    error=exc,
-                                )
+                            last_diagnostic_at, backoff_seconds = self._handle_vector_queue_full(
+                                db=db,
+                                stream=stream,
+                                settings=settings,
+                                captured_at=captured_at,
+                                last_diagnostic_at=last_diagnostic_at,
+                                frame_path=frame_path,
+                                raw_detections=len(raw_detections),
+                                quality_detections=len(detections),
+                                crossings=0,
+                                failures=queue_backpressure_failures,
+                                error=exc,
                             )
                             stop_event.wait(backoff_seconds)
                             continue
@@ -331,10 +376,24 @@ class StreamRuntime:
                             frame_path=frame_path,
                         )
                         frame_path.unlink(missing_ok=True)
-                    time.sleep(stream.frame_interval_seconds)
+                    stop_event.wait(stream.frame_interval_seconds)
+            except Exception:
+                db.rollback()
+                logger.exception("Frame processing failed for stream %s", stream_id)
+                self._set_stream_error(db, stream, "Frame processing failed; reconnecting")
             finally:
-                capture.release()
-                db.close()
+                try:
+                    capture.release()
+                except RuntimeError:
+                    # The decoder process survived SIGTERM and SIGKILL (e.g. stuck in an
+                    # uninterruptible kernel/GPU-driver wait). Losing this thread would leave
+                    # the stream stuck until someone notices and restarts it by hand; log and
+                    # keep the reconnect loop alive instead, even though this process is now
+                    # abandoned as an orphan until it eventually exits on its own.
+                    logger.exception("Could not reap decoder process for stream %s", stream_id)
+                finally:
+                    db.close()
+            stop_event.wait(reconnect_interval)
 
         self._mark_stopped(stream_id)
 
@@ -483,10 +542,7 @@ class StreamRuntime:
         if not settings.stream_diagnostics_enabled:
             return last_diagnostic_at
         now = time.monotonic()
-        if (
-            not force
-            and now - last_diagnostic_at < settings.stream_diagnostics_interval_seconds
-        ):
+        if not force and now - last_diagnostic_at < settings.stream_diagnostics_interval_seconds:
             return last_diagnostic_at
         logger.warning(
             "stream_diag stream_id=%s name=%r captured_at=%s raw=%s quality=%s "
@@ -536,11 +592,14 @@ class StreamRuntime:
         db.close()
 
     def _mark_stopped(self, stream_id: uuid.UUID) -> None:
+        with self._lock:
+            restarting = stream_id in self._restart_on_shutdown
         db = SessionLocal()
         stream = db.get(VideoStream, stream_id)
         if stream is not None:
-            stream.status = "stopped"
-            stream.stopped_at = local_now(get_settings())
+            stream.status = "starting" if restarting else "stopped"
+            if not restarting:
+                stream.stopped_at = local_now(get_settings())
             db.add(stream)
             db.commit()
         db.close()

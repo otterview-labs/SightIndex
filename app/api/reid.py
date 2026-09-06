@@ -1,3 +1,5 @@
+import csv
+import io
 import logging
 import tempfile
 import uuid
@@ -6,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy import select
 
 from app.api.deps import AppSettings, DBSession
@@ -14,6 +16,9 @@ from app.models.media import PersonCrop, VideoStream
 from app.schemas.media import SearchFilters
 from app.schemas.reid import (
     ReidCameraLink,
+    ReidFaceCoverage,
+    ReidFeedbackRead,
+    ReidFeedbackUpsert,
     ReidLinkResponse,
     ReidMatchItem,
     ReidRebuildResponse,
@@ -24,6 +29,7 @@ from app.services.faces import face_runtime_status
 from app.services.observation_index import ObservationIndexService
 from app.services.reid import ReidRuntimeError
 from app.services.reid_attributes import aggregate_reid_attributes, compare_reid_attributes
+from app.services.reid_feedback import FeedbackCropNotFoundError, ReidFeedbackService
 from app.services.reid_fusion import (
     annotate_fusion_decision,
     enrich_face_evidence,
@@ -45,6 +51,94 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reid", tags=["reid"])
 
 UploadImage = Annotated[UploadFile, File(...)]
+
+
+@router.put("/feedback", response_model=ReidFeedbackRead)
+def save_reid_feedback(payload: ReidFeedbackUpsert, db: DBSession) -> ReidFeedbackRead:
+    """Creates or replaces the human verdict for one directed crop pair.
+
+    The label is calibration input only. It does not modify crop identity, search thresholds or
+    current ranking, so an accidental click cannot contaminate live results.
+    """
+
+    try:
+        return ReidFeedbackRead.model_validate(ReidFeedbackService(db).upsert(payload))
+    except FeedbackCropNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/feedback", response_model=list[ReidFeedbackRead])
+def list_reid_feedback(
+    query_crop_id: uuid.UUID,
+    db: DBSession,
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> list[ReidFeedbackRead]:
+    try:
+        rows = ReidFeedbackService(db).list_for_query(query_crop_id, limit=limit)
+    except FeedbackCropNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [ReidFeedbackRead.model_validate(row) for row in rows]
+
+
+@router.get("/feedback/export.csv")
+def export_reid_feedback(db: DBSession) -> Response:
+    """Exports labels in the format consumed by evaluate_reid_walkthrough.py."""
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        [
+            "query_crop_id",
+            "candidate_crop_id",
+            "same_person",
+            "source",
+            "body_score",
+            "face_similarity",
+            "face_reliability",
+            "face_match",
+            "attribute_agreement",
+            "attribute_comparable_count",
+            "attribute_match_count",
+            "attribute_conflict_count",
+            "fusion_score",
+            "evidence_level",
+            "decision_reason",
+            "created_at",
+            "updated_at",
+        ]
+    )
+    for row in ReidFeedbackService(db).export_all():
+        writer.writerow(
+            [
+                row.query_crop_id,
+                row.candidate_crop_id,
+                "true" if row.same_person else "false",
+                row.source,
+                row.body_score,
+                row.face_similarity,
+                row.face_reliability,
+                "" if row.face_match is None else "true" if row.face_match else "false",
+                row.attribute_agreement,
+                row.attribute_comparable_count,
+                row.attribute_match_count,
+                row.attribute_conflict_count,
+                row.fusion_score,
+                row.evidence_level,
+                row.decision_reason,
+                row.created_at.isoformat(),
+                row.updated_at.isoformat(),
+            ]
+        )
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="reid-feedback.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 def _service(db: DBSession, settings: AppSettings) -> ReidIndexService:
@@ -150,7 +244,6 @@ def _to_items(
     return items
 
 
-
 def _stature_percentile(attributes: dict | None) -> int | None:
     if not isinstance(attributes, dict):
         return None
@@ -202,20 +295,36 @@ def _admit(
     in the 0.43 to 0.48 band. A single 0.5 cut answers "who else was at this door" perfectly and
     "where else did they go" never.
 
-    An uploaded photo has no camera, so nothing is same-camera and every match is held to the
-    cross-camera bar.
+    An uploaded photo has no camera, so nothing is same-camera and every body-only match is held
+    to the cross-camera bar. A reliable face match may bypass either body bar; candidates without
+    reliable face evidence cannot.
     """
 
     return [
         item
         for item in items
-        if item.score
+        if item.face_match is True
+        or item.score
         >= (
             settings.reid_min_score
             if query_camera is not None and item.camera_id == query_camera
             else settings.reid_min_score_cross_camera
         )
     ]
+
+
+def _candidate_score_floor(settings: AppSettings) -> float:
+    """Return the cheapest score worth loading from SQL for final evidence fusion.
+
+    The ordinary thresholds still decide body-only admission. The lower floor merely lets a
+    small camera-balanced shortlist reach face verification; an item below the ordinary bar is
+    removed again unless a reliable face match confirms it.
+    """
+
+    body_floor = min(settings.reid_min_score, settings.reid_min_score_cross_camera)
+    if not settings.reid_face_priority_enabled:
+        return body_floor
+    return min(body_floor, settings.reid_face_rescue_min_body_score)
 
 
 def _reserve_camera_slots(
@@ -265,21 +374,17 @@ def _collapse(
     query_crop: PersonCrop | None = None,
     query_crops: list[PersonCrop] | None = None,
     query_image_path: Path | None = None,
+    face_coverage: ReidFaceCoverage | None = None,
 ) -> list[ReidMatchItem]:
     """Turns raw hits into visits, fetching the vectors the identity test needs."""
 
     # Camera metadata is not stored in the current Milvus schema, so the raw pool is intentionally
-    # deep. Drop scores that cannot pass either calibrated threshold before loading SQL metadata.
-    score_floor = min(settings.reid_min_score, settings.reid_min_score_cross_camera)
+    # deep. Keep the configured face-rescue band until face verification has run; body-only rows
+    # still have to clear the calibrated camera-specific threshold below.
+    score_floor = _candidate_score_floor(settings)
     matches = [match for match in matches if match.score >= score_floor]
-    items = _admit(
-        _to_items(db, settings, matches),
-        settings,
-        query_camera,
-    )
-    items, attribute_bonus = _filter_by_attributes(
-        db, settings, items, query_attributes
-    )
+    items = _to_items(db, settings, matches)
+    items, attribute_bonus = _filter_by_attributes(db, settings, items, query_attributes)
     # Scored after admission, never before: the two thresholds were measured against the
     # embedding's own scores, and moving those scores would quietly move the thresholds too.
     ranking = {
@@ -295,9 +400,9 @@ def _collapse(
                 REID_OBJECT_TYPE, [item.crop_id for item in items]
             )
         except VectorIndexError:
-            # Grouping without the identity test is worse, not broken; a search that still
-            # answers beats one that 503s because a secondary read failed.
-            logger.warning("ReID identity grouping degraded: vector fetch failed", exc_info=True)
+            # Keep the search available, but missing identity evidence must leave frames
+            # independent. collapse_occurrences enforces that invariant for every caller.
+            logger.warning("ReID vector fetch failed; retaining separate frames", exc_info=True)
     # Do not globally truncate before the camera quota runs. A camera-domain shift can otherwise
     # fill the first N visits with one doorway and erase every other camera a second time.
     grouped = collapse_occurrences(
@@ -314,7 +419,11 @@ def _collapse(
         grouped,
         query_image_path=query_image_path,
         query_crops=query_crops,
+        coverage=face_coverage,
     )
+    # Admission follows face enrichment deliberately: a reliable face may rescue an otherwise
+    # weak body candidate. Missing or low-quality faces do not bypass either body threshold.
+    grouped = _admit(grouped, settings, query_camera)
     grouped = _reject_attribute_conflicts(
         grouped,
         settings,
@@ -382,15 +491,15 @@ def _filter_by_attributes(
         item.attribute_evidence_weight = round(compatibility.evidence_weight, 4)
         item.attribute_conflict_weight = round(compatibility.conflict_weight, 4)
         kept.append(item)
-        if compatibility.agreement is not None:
+        # A single tag is too little context for ranking, even if it happens to agree 100%.
+        # Keep measured counts for inspection, but leave both bonus and tie-break neutral.
+        if compatibility.compared_count >= 2 and compatibility.agreement is not None:
             coverage = min(
                 compatibility.evidence_weight / settings.reid_attribute_full_weight,
                 1.0,
             )
             bonuses[item.crop_id] = (
-                settings.reid_attribute_weight
-                * (compatibility.agreement * 2.0 - 1.0)
-                * coverage
+                settings.reid_attribute_weight * (compatibility.agreement * 2.0 - 1.0) * coverage
             )
     return kept, bonuses
 
@@ -426,8 +535,7 @@ def _reject_attribute_conflicts(
         or not inside_hard_filter_window(item)
         or item.attribute_comparable_count < settings.reid_attribute_hard_conflicts
         or len(item.attribute_conflicts) < settings.reid_attribute_hard_conflicts
-        or (item.attribute_conflict_weight or 0.0)
-        < settings.reid_attribute_hard_confidence
+        or (item.attribute_conflict_weight or 0.0) < settings.reid_attribute_hard_confidence
     ]
 
 
@@ -470,10 +578,7 @@ def _query_tracklet_attributes(
     gallery: list[PersonCrop],
 ) -> dict | None:
     source_attributes = _query_crop_attributes(db, settings, source)
-    samples = [
-        source_attributes if crop.id == source.id else crop.attributes
-        for crop in gallery
-    ]
+    samples = [source_attributes if crop.id == source.id else crop.attributes for crop in gallery]
     return aggregate_reid_attributes(
         samples,
         min_confidence=settings.reid_attribute_min_confidence,
@@ -504,9 +609,7 @@ def reid_status(db: DBSession, settings: AppSettings) -> ReidStatusResponse:
     )
     milvus_in_cooldown = milvus_configured and not service.index.is_available()
     metric_error = (
-        None
-        if service.index.reid_metric_supported
-        else "ReID requires MILVUS_METRIC_TYPE=COSINE"
+        None if service.index.reid_metric_supported else "ReID requires MILVUS_METRIC_TYPE=COSINE"
     )
     indexed = service.indexed_count()
     face_status = face_runtime_status(settings)
@@ -529,6 +632,7 @@ def reid_status(db: DBSession, settings: AppSettings) -> ReidStatusResponse:
         indexed_crops=int(indexed or 0),
         pending_crops=service.pending_count(cap=None),
         min_score=settings.reid_min_score,
+        min_score_cross_camera=settings.reid_min_score_cross_camera,
         attribute_filter_enabled=settings.reid_attribute_filter_enabled,
         attribute_min_confidence=settings.reid_attribute_min_confidence,
         attribute_hard_conflicts=settings.reid_attribute_hard_conflicts,
@@ -536,9 +640,7 @@ def reid_status(db: DBSession, settings: AppSettings) -> ReidStatusResponse:
         attribute_full_weight=settings.reid_attribute_full_weight,
         attribute_hard_filter_window_hours=settings.reid_attribute_hard_filter_window_hours,
         face_priority_enabled=settings.reid_face_priority_enabled,
-        face_priority_ready=(
-            settings.reid_face_priority_enabled and face_status.ready
-        ),
+        face_priority_ready=(settings.reid_face_priority_enabled and face_status.ready),
         face_priority_error=face_status.error,
         face_provider=face_status.provider,
         face_model=face_status.model,
@@ -546,6 +648,7 @@ def reid_status(db: DBSession, settings: AppSettings) -> ReidStatusResponse:
         face_candidate_limit=settings.reid_face_candidate_limit,
         face_min_quality=settings.reid_face_min_quality,
         face_strong_reliability=settings.reid_face_strong_reliability,
+        face_rescue_min_body_score=settings.reid_face_rescue_min_body_score,
     )
 
 
@@ -565,12 +668,17 @@ def reid_search(
         query_path = Path(temp_dir) / f"query{suffix}"
         query_path.write_bytes(file.file.read())
         try:
-            matches = service.search_by_image(query_path, candidates)
+            matches = service.search_by_image(
+                query_path,
+                candidates,
+                min_score=_candidate_score_floor(settings),
+            )
             query_attributes = _query_image_attributes(query_path, settings)
         except ReidRuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except VectorIndexError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        face_coverage = ReidFaceCoverage()
         return ReidSearchResponse(
             items=_collapse(
                 db,
@@ -580,10 +688,12 @@ def reid_search(
                 visits,
                 query_attributes=query_attributes,
                 query_image_path=query_path,
+                face_coverage=face_coverage,
             ),
             model=settings.reid_model,
             min_score=settings.reid_min_score,
             collapse_window_seconds=settings.reid_collapse_window_seconds,
+            face_coverage=face_coverage,
         )
 
 
@@ -601,7 +711,11 @@ def reid_similar_to_crop(
         raise HTTPException(status_code=404, detail="Crop not found")
     try:
         query_crops = service.query_tracklet(crop)
-        matches = service.search_by_crop_gallery(query_crops, candidates)
+        matches = service.search_by_crop_gallery(
+            query_crops,
+            candidates,
+            min_score=_candidate_score_floor(settings),
+        )
         query_attributes = _query_tracklet_attributes(db, settings, crop, query_crops)
     except (ReidRuntimeError, VectorIndexError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -609,6 +723,7 @@ def reid_similar_to_crop(
     # and would win the visit it belongs to, reporting the query back as its own best match.
     query_crop_ids = {query_crop.id for query_crop in query_crops}
     matches = [match for match in matches if match.crop_id not in query_crop_ids]
+    face_coverage = ReidFaceCoverage()
     return ReidSearchResponse(
         items=_collapse(
             db,
@@ -621,12 +736,14 @@ def reid_similar_to_crop(
             query_attributes=query_attributes,
             query_crop=crop,
             query_crops=query_crops,
+            face_coverage=face_coverage,
         ),
         model=settings.reid_model,
         min_score=settings.reid_min_score,
         collapse_window_seconds=settings.reid_collapse_window_seconds,
         query_mode="tracklet" if len(query_crops) > 1 else "single_frame",
         query_frame_count=len(query_crops),
+        face_coverage=face_coverage,
     )
 
 
@@ -682,16 +799,22 @@ def reid_camera_links(
         and item.camera_id is not None
         and item.camera_id != crop.camera_id
     ]
-    enrich_face_evidence(db, settings, crop, linked_items, query_crops=query_crops)
+    face_coverage = enrich_face_evidence(db, settings, crop, linked_items, query_crops=query_crops)
     linked_items = _reject_attribute_conflicts(
         linked_items,
         settings,
         query_captured_at=crop.captured_at,
     )
+    linked_items = reject_reliable_face_mismatches(
+        linked_items,
+        settings.reid_face_hard_reject_threshold,
+    )
     for item in linked_items:
-        appearance_score = item.score + _stature_bonus(
-            item, query_stature, crop.camera_id, settings.reid_stature_weight
-        ) + attribute_bonus.get(item.crop_id, 0.0)
+        appearance_score = (
+            item.score
+            + _stature_bonus(item, query_stature, crop.camera_id, settings.reid_stature_weight)
+            + attribute_bonus.get(item.crop_id, 0.0)
+        )
         ranking = fusion_rank(item, appearance_score)
         annotate_fusion_decision(
             item,
@@ -726,6 +849,9 @@ def reid_camera_links(
             face_query_quality=item.face_query_quality,
             face_candidate_quality=item.face_candidate_quality,
             face_reliability=item.face_reliability,
+            face_query_identity_verified=item.face_query_identity_verified,
+            face_candidate_identity_verified=item.face_candidate_identity_verified,
+            face_candidate_source_crop_id=item.face_candidate_source_crop_id,
             fusion_score=item.fusion_score,
             evidence_level=item.evidence_level,
             decision_reason=item.decision_reason,
@@ -747,6 +873,7 @@ def reid_camera_links(
         chance_ceiling=settings.reid_chance_ceiling,
         query_mode="tracklet" if len(query_crops) > 1 else "single_frame",
         query_frame_count=len(query_crops),
+        face_coverage=face_coverage or ReidFaceCoverage(),
     )
 
 

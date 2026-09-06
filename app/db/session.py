@@ -36,7 +36,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from app.models import chat, events, media, persons, vectors  # noqa: F401
+    from app.models import chat, events, media, persons, reid, vectors  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_compatible_schema()
@@ -45,6 +45,17 @@ def init_db() -> None:
 def _ensure_compatible_schema() -> None:
     inspector = inspect(engine)
     table_names = inspector.get_table_names()
+    if "crop_face_extractions" in table_names:
+        face_cache_columns = {
+            column["name"] for column in inspector.get_columns("crop_face_extractions")
+        }
+        # Additive and idempotent: existing embeddings remain usable on upgrade/rollback.
+        with engine.begin() as connection:
+            for column_name in ("absence_reason", "input_fingerprint"):
+                if column_name not in face_cache_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE crop_face_extractions ADD COLUMN {column_name} VARCHAR")
+                    )
     if "vector_index_capacity_locks" in table_names:
         with engine.begin() as connection:
             for target in (
@@ -53,6 +64,7 @@ def _ensure_compatible_schema() -> None:
                 "reid_person_crop",
                 "reid_marker",
                 "observation_index",
+                "person_attributes",
             ):
                 connection.execute(
                     text(
@@ -84,10 +96,24 @@ def _ensure_compatible_schema() -> None:
                     "ON vl_embeddings (object_type, object_id)"
                 )
             )
+        _ensure_indexes(
+            {
+                "ix_vl_embeddings_type_model_dim": (
+                    "vl_embeddings",
+                    "object_type, embedding_model, embedding_dim",
+                ),
+            }
+        )
+    if "face_embeddings" in table_names:
+        _ensure_indexes(
+            {
+                "ix_face_embeddings_person_id": ("face_embeddings", "person_id"),
+                "ix_face_embeddings_image_id": ("face_embeddings", "image_id"),
+                "ix_face_embeddings_crop_id": ("face_embeddings", "crop_id"),
+            }
+        )
     if "video_streams" in table_names:
-        video_stream_columns = {
-            column["name"] for column in inspector.get_columns("video_streams")
-        }
+        video_stream_columns = {column["name"] for column in inspector.get_columns("video_streams")}
         if "counting_line" not in video_stream_columns:
             column_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
             with engine.begin() as connection:
@@ -96,6 +122,19 @@ def _ensure_compatible_schema() -> None:
                 )
     if "video_streams" in table_names:
         stream_columns = {column["name"] for column in inspector.get_columns("video_streams")}
+        with engine.begin() as connection:
+            if "last_frame_read_at" not in stream_columns:
+                stamp_type = "TIMESTAMPTZ" if engine.dialect.name == "postgresql" else "TIMESTAMP"
+                connection.execute(
+                    text(f"ALTER TABLE video_streams ADD COLUMN last_frame_read_at {stamp_type}")
+                )
+            if "consecutive_read_failures" not in stream_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE video_streams ADD COLUMN consecutive_read_failures "
+                        "INTEGER DEFAULT 0 NOT NULL"
+                    )
+                )
         if "location_name" not in stream_columns:
             with engine.begin() as connection:
                 connection.execute(
@@ -103,9 +142,7 @@ def _ensure_compatible_schema() -> None:
                 )
 
     if "person_crops" in table_names:
-        person_crop_columns = {
-            column["name"] for column in inspector.get_columns("person_crops")
-        }
+        person_crop_columns = {column["name"] for column in inspector.get_columns("person_crops")}
         if "attributes" not in person_crop_columns:
             column_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
             with engine.begin() as connection:
@@ -132,24 +169,30 @@ def _ensure_compatible_schema() -> None:
                     text(f"ALTER TABLE counting_events ADD COLUMN stream_id {column_type}")
                 )
                 connection.execute(
-                    text("CREATE INDEX IF NOT EXISTS ix_counting_events_stream_id "
-                         "ON counting_events (stream_id)")
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_counting_events_stream_id "
+                        "ON counting_events (stream_id)"
+                    )
                 )
             if "image_id" not in counting_event_columns:
                 connection.execute(
                     text(f"ALTER TABLE counting_events ADD COLUMN image_id {column_type}")
                 )
                 connection.execute(
-                    text("CREATE INDEX IF NOT EXISTS ix_counting_events_image_id "
-                         "ON counting_events (image_id)")
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_counting_events_image_id "
+                        "ON counting_events (image_id)"
+                    )
                 )
             if "crop_id" not in counting_event_columns:
                 connection.execute(
                     text(f"ALTER TABLE counting_events ADD COLUMN crop_id {column_type}")
                 )
                 connection.execute(
-                    text("CREATE INDEX IF NOT EXISTS ix_counting_events_crop_id "
-                         "ON counting_events (crop_id)")
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_counting_events_crop_id "
+                        "ON counting_events (crop_id)"
+                    )
                 )
             _ensure_indexes(
                 {

@@ -18,7 +18,7 @@ from app.db.session import SessionLocal, init_db
 from app.models.media import VideoStream
 from app.services.storage import StorageService
 from app.services.stream_runtime import stream_runtime
-from app.services.vector_index_queue import vector_index_queue
+from app.services.vector_index_queue import attribute_queue, vector_index_queue
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.auto_create_tables:
         init_db()
     vector_index_queue.start(settings)
+    attribute_queue.start(settings)
     if settings.stream_autostart_running:
         _autostart_running_streams()
     try:
         yield
     finally:
+        stream_runtime.stop_all()
+        attribute_queue.stop()
         vector_index_queue.stop()
 
 

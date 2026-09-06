@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from app.schemas.common import ORMModel, SearchFilters
 
@@ -169,10 +169,25 @@ class VideoStreamRead(ORMModel):
     counting_line: CountingLineConfig | None
     last_frame_image_id: uuid.UUID | None
     last_error: str | None
+    last_frame_read_at: datetime | None = None
+    consecutive_read_failures: int = 0
     started_at: datetime | None
     stopped_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def capture_health(self) -> str:
+        if self.status in {"stopped", "error"}:
+            return self.status
+        if self.status == "starting" or self.last_frame_read_at is None:
+            return "unverified"
+        stamp = self.last_frame_read_at
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - stamp).total_seconds()
+        return "stalled" if age > max(30, self.frame_interval_seconds * 3) else "healthy"
 
 
 class StreamActionResponse(BaseModel):

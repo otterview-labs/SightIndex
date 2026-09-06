@@ -668,6 +668,7 @@ if [ "$SKIP_FRONTEND" -eq 0 ]; then
   FRONTEND_REPLACEMENT_STARTED=1
   as_deployer npm --prefix "$ROOT_DIR/frontend" ci >"$LOG_DIR/frontend-build.log" 2>&1
   as_deployer npm --prefix "$ROOT_DIR/frontend" run build >>"$LOG_DIR/frontend-build.log" 2>&1
+  as_deployer npm --prefix "$ROOT_DIR/frontend" run test:reid >>"$LOG_DIR/frontend-build.log" 2>&1
 fi
 [ -f "$ROOT_DIR/frontend/dist/index.html" ] || fail "frontend/dist/index.html is missing"
 assert_trusted_artifact "$ROOT_DIR/frontend/dist" "frontend bundle"

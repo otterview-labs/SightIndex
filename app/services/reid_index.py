@@ -68,19 +68,20 @@ def collapse_occurrences(
     inside that supposed single visit scored below 0.7 against each other.
 
     Similarity between two candidates cannot be read off their scores, which only say how close
-    each is to the query, so callers pass the stored vectors. Without them the identity test is
-    skipped and grouping degrades to the time-only behaviour.
+    each is to the query, so callers pass the stored vectors. If identity is required but cannot
+    be checked, frames stay separate. Only an explicit non-positive identity threshold opts in
+    to legacy time-only grouping; an unknown camera never establishes co-location.
     """
 
     if window_seconds <= 0:
-        return items[:limit]
+        return [_merge_occurrence([item]) for item in items[:limit]]
 
     similarity = _pairwise_similarity(vectors)
     by_camera: dict[uuid.UUID | None, list[ReidMatchItem]] = {}
     groups: list[list[ReidMatchItem]] = []
     for item in items:
-        if item.captured_at is None:
-            # Undated crops cannot be neighbours of anything; merging them would be a guess.
+        if item.captured_at is None or item.camera_id is None:
+            # Missing time or camera cannot establish co-location, even in time-only mode.
             groups.append([item])
         else:
             by_camera.setdefault(item.camera_id, []).append(item)
@@ -118,12 +119,16 @@ def _join_open_group(
 
     best_group: list[ReidMatchItem] | None = None
     best_weakest = identity_threshold
+    if identity_threshold > 0 and similarity is None:
+        return False
     for group in open_groups:
         if (item.captured_at - group[-1].captured_at).total_seconds() > window_seconds:
             continue  # this group has lapsed, and a later frame cannot revive it
-        if similarity is None or identity_threshold <= 0:
+        if identity_threshold <= 0:
             best_group = group
             break
+        if similarity is None:
+            continue
         weakest = similarity.weakest_link(item.crop_id, [member.crop_id for member in group])
         if weakest is not None and weakest >= best_weakest:
             best_group, best_weakest = group, weakest
@@ -138,9 +143,9 @@ class _Similarity:
 
     def __init__(self, vectors: dict[uuid.UUID, list[float]]) -> None:
         self._position = {crop_id: index for index, crop_id in enumerate(vectors)}
-        # The ReID service returns L2-normalised vectors, so this product is the cosine.
-        matrix = np.asarray(list(vectors.values()), dtype="float32")
-        self._scores = matrix @ matrix.T
+        # _pairwise_similarity validates and normalises each vector before constructing this.
+        matrix = np.asarray(list(vectors.values()), dtype="float64")
+        self._scores = np.clip(matrix @ matrix.T, -1.0, 1.0)
 
     def weakest_link(self, crop_id: uuid.UUID, members: list[uuid.UUID]) -> float | None:
         row = self._position.get(crop_id)
@@ -153,22 +158,52 @@ class _Similarity:
 def _pairwise_similarity(
     vectors: dict[uuid.UUID, list[float]] | None,
 ) -> "_Similarity | None":
+    """Build cosine evidence without allowing unavailable or malformed vectors to imply identity.
+
+    Invalid vectors remain unknown individually. Mixed dimensions make the complete set unsafe
+    to compare: without a model-space identifier, choosing the most common dimension is a guess.
+    Scaling before normalisation prevents very large or small finite values overflowing norms.
+    """
+
     if np is None or not vectors or len(vectors) < 2:
         return None
-    dimensions = {len(vector) for vector in vectors.values()}
-    if len(dimensions) != 1:
+    normalised: dict[uuid.UUID, list[float]] = {}
+    dimensions: set[int] = set()
+    for crop_id, vector in vectors.items():
+        try:
+            if isinstance(vector, list | tuple) and any(
+                isinstance(value, bool) for value in vector
+            ):
+                continue
+            values = np.asarray(vector)
+            if values.ndim != 1 or not values.size or values.dtype.kind not in "fiu":
+                continue
+            values = values.astype("float64")
+            if not np.isfinite(values).all():
+                continue
+            scale = float(np.abs(values).max())
+            if scale <= 0:
+                continue
+            scaled = values / scale
+            normalised[crop_id] = (scaled / np.linalg.norm(scaled)).tolist()
+            dimensions.add(int(values.size))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    if len(normalised) < 2 or len(dimensions) != 1:
         return None
-    return _Similarity(vectors)
+    return _Similarity(normalised)
 
 
 def _merge_occurrence(group: list["ReidMatchItem"]) -> "ReidMatchItem":
-    best = max(group, key=lambda item: item.score)
+    ranked = sorted(group, key=lambda item: item.score, reverse=True)
+    best = ranked[0]
     stamps = [item.captured_at for item in group if item.captured_at is not None]
     return best.model_copy(
         update={
             "frame_count": len(group),
             "first_seen": min(stamps) if stamps else None,
             "last_seen": max(stamps) if stamps else None,
+            "occurrence_crop_ids": [item.crop_id for item in ranked],
         }
     )
 

@@ -8,6 +8,7 @@ import type {
   FaceRecognitionResponse,
   PersonTrajectoryPoint,
 } from "@/api/types";
+import EmptyState from "@/components/EmptyState.vue";
 import FaceBoxThumb from "@/components/FaceBoxThumb.vue";
 import FaceZoom from "@/components/FaceZoom.vue";
 import FileField from "@/components/FileField.vue";
@@ -355,9 +356,7 @@ onMounted(async () => {
       </form>
 
       <div class="person-list">
-        <div v-if="!persons.length" class="empty">
-          <strong>还没有人员</strong>
-        </div>
+        <EmptyState v-if="!persons.length" title="还没有人员" />
         <article
           v-for="person in persons"
           :key="person.id"
@@ -413,15 +412,9 @@ onMounted(async () => {
         </button>
       </div>
       <div class="diagnostic-list">
-        <div v-if="diagnosticsRunning" class="empty">
-          <strong>诊断中</strong>正在分析最近人体 crop。
-        </div>
-        <div v-else-if="diagnostics === null" class="empty">
-          <strong>未运行诊断</strong>
-        </div>
-        <div v-else-if="!diagnostics.length" class="empty">
-          <strong>暂无诊断数据</strong>最近没有人体 crop。
-        </div>
+        <EmptyState v-if="diagnosticsRunning" title="诊断中" inline="正在分析最近人体 crop。" />
+        <EmptyState v-else-if="diagnostics === null" title="未运行诊断" />
+        <EmptyState v-else-if="!diagnostics.length" title="暂无诊断数据" inline="最近没有人体 crop。" />
         <article
           v-for="item in diagnostics ?? []"
           v-else
@@ -480,12 +473,12 @@ onMounted(async () => {
         <span v-for="warning in trajectoryWarnings" :key="warning">{{ warning }}</span>
       </div>
       <div class="trajectory-list">
-        <div v-if="trajectoryLoading" class="empty">
-          <strong>{{ trajectoryLoadingText.label }}</strong>{{ trajectoryLoadingText.hint }}
-        </div>
-        <div v-else-if="!trajectory.length" class="empty">
-          <strong>暂无轨迹</strong>
-        </div>
+        <EmptyState
+          v-if="trajectoryLoading"
+          :title="trajectoryLoadingText.label"
+          :inline="trajectoryLoadingText.hint"
+        />
+        <EmptyState v-else-if="!trajectory.length" title="暂无轨迹" />
         <article
           v-for="(item, index) in trajectory"
           v-else

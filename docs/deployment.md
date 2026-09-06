@@ -539,3 +539,145 @@ because the old process starts successfully.
   service, deployment, or root owner.
 - Do not log tokens, full RTSP URLs, or raw biometric payloads.
 - Review third-party model licenses before commercial or biometric use.
+
+## Operational updates (2026-09)
+
+### Code sync and release checks
+
+Sync production code with `deploy/rtx5090/sync_code.sh <user@host> <target-dir>`. The script
+explicitly excludes `.env`, `data/`, the root `sightindex.db` plus all SQLite sidecar files,
+model weights, and logs. Do not replace it with a plain `rsync`, and never run `rsync --delete`
+against the project root: that deletes models and field data that are not in Git. The installer
+takes an online SQLite backup into `backups/` on every run, restarts the ReID and API services,
+and waits up to 300 seconds for model warm-up.
+
+Before releasing, run locally:
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check app tests scripts
+cd frontend
+npm run build
+npm run test:reid
+```
+
+`test:reid` drives the Vue compiler and reactivity runtime to verify query switching, stale
+responses, manual labeling, camera grouping, lightbox focus, and evidence copy. It touches no
+production service or real imagery and does not replace visual acceptance in a browser. Both
+deployment entry points run this regression while building the frontend; with `--skip-frontend`
+you must have passed the build and regression locally first.
+
+When the server was synced without `.git`, verify the release by comparing the recorded release
+commit and SHA-256 of key code and frontend build files; a failing `git` command is not evidence
+that versions match.
+
+### ReID calibration feedback table
+
+The first API start after release creates the `reid_match_feedback` table through the existing
+`init_db()`. Manual confirmations on the console only write to this calibration table; they never
+change `person_crops.person_id` or live ranking. Export labels at `/api/reid/feedback/export.csv`
+and evaluate thresholds per `docs/reid-walkthrough-calibration.md`.
+
+### ReID face-safety migration and acceptance
+
+The update adds two nullable columns to `crop_face_extractions`: `absence_reason` and
+`input_fingerprint`. With `AUTO_CREATE_TABLES=true` the compatible migration runs automatically at
+API startup, is idempotent, and preserves existing rows. `verify.sh` now checks both columns and
+the `face_coverage` field in search and cross-camera responses; an HTTP 200 alone does not
+complete acceptance. If automatic table creation is disabled, back up the database, run
+`.venv/bin/python -c 'from app.db.session import init_db; init_db()'` in a maintenance window,
+then start the new API. Multi-worker deployments must finish the migration before starting
+workers rather than initializing concurrently.
+
+- `FACE_NEGATIVE_CACHE_TTL_SECONDS=300` only controls the short-lived cache of deterministic
+  abstentions; it is not a face-quality threshold.
+- Legacy reason-less empty cache entries retry lazily per query; temporary file, read, or
+  inference failures add no negative cache entries; changes to the original image or person box
+  invalidate the negative cache immediately. No Milvus wipe or full body-index rebuild is needed.
+  Early queries may be slower while faces re-extract; replay a small batch first and watch
+  latency.
+- Valid positive cache entries are reused; new entries record the source-image fingerprint.
+  Upscaling no longer changes the recognition model name, and legacy upscale suffixes stay
+  readable.
+- Crops without body vectors stay as independent frames instead of guessing identity by time;
+  appearance counts may rise, which is not an index-coverage regression.
+- At most two candidate frames are consulted per appearance. Borrowed faces only influence soft
+  ranking and can neither hard-confirm nor hard-exclude; cards disclose the supplemental frame
+  source.
+- Acceptance also confirms `REID_FACE_RESCUE_MIN_BODY_SCORE` does not exceed the normal body
+  candidate threshold: it only widens the face-review pool and never lowers the formal body
+  admission line; low-score candidates without a reliable face match are still dropped.
+
+When rolling back application code, the two new nullable columns can stay: old code ignores them,
+and neither dropping tables nor restoring the whole database over new observation data is
+required. If a database restore is unavoidable, stop writers first and assess the data loss after
+the backup point; a code rollback is not authorization for a database rollback. Real-world
+accuracy still requires a manually labeled multi-person cross-camera walkthrough; synthetic
+regressions and successful model loads do not substitute.
+
+Face review uses the target person box within the original frame and does not treat bystander
+faces in padded display crops as the target. It abstains on multiple or unlinkable faces; native
+face pixels, sharpness, and five-point symmetry jointly cap the quality score, and upscaling does
+not raise native quality. The `identity-v2` cache signature invalidates older extraction results
+automatically, and no-face results are cached durably. These quality parameters are conservative
+defaults pending walkthrough calibration.
+
+### Stream heartbeat and decoder subprocess
+
+Check capture health from `/api/streams` twice, roughly 10 seconds apart, using only the
+read-frame heartbeat — not stored image counts or `updated_at`:
+
+- `last_frame_read_at` (UTC), `consecutive_read_failures`, and `capture_health` are per stream.
+- A successful frame read refreshes the heartbeat even when nobody is in view, the stream is
+  warming up, or frames are skipped by quality gates (writes are throttled to 5 seconds and also
+  follow the sampling interval).
+- `healthy` means the heartbeat is fresh; `stalled` means no update for more than
+  `max(30s, 3 × sampling interval)`; `unverified` means no frame yet or reconnecting.
+- `updated_at` changes on other writes such as status edits and never proves RTSP reads on its
+  own.
+
+RTSP decoding now runs in a separate subprocess. Even when a native `read()` ignores its timeout,
+the whole decoder process is terminated, reaped, and reconnected, so permanently blocked threads
+no longer accumulate. Normal API upgrades reap subprocesses and preserve the auto-start intent of
+running cameras; streams stopped by a user are not restarted.
+
+### Background VLM structured attributes
+
+Recommended flags for the RTX 5090 host: `VLM_STRUCTURED_BACKGROUND=true` and
+`VLM_STRUCTURED_ON_INGEST=false`. New crops and `person_attributes` jobs persist in the database
+and a dedicated consumer thread runs the VLM without blocking RTSP capture or the ReID index
+consumer. A sweep every minute backfills historical unlabeled crops; failures retry with queue
+backoff, expired leases recover after process restarts, and jobs that reach the retry limit stay
+`failed` instead of resetting forever. When the queue is full, captured images are still saved
+and enqueued later by a database scan.
+
+```bash
+# Current coverage and failure records (not yesterday's backfill completion marker)
+curl -fsS http://127.0.0.1:18030/api/attributes/jobs
+# After fixing the cause, retry one crop; completed labels are not overwritten.
+curl -fsS -X POST http://127.0.0.1:18030/api/attributes/jobs/CROP_UUID/retry
+```
+
+`pending_crops` includes unfinished and quarantined-failed crops; coverage is complete only when
+both it and `queue` are empty. The old `sightindex-attribute-backfill.service` remains a manual
+batch tool; continuous processing of new data belongs to the persistent job queue inside the API.
+
+### Manual acceptance for the ReID console
+
+HTTP 200 only proves the page is reachable. Also confirm:
+
+- The query image matches the current candidates; after switching from a `crop_id` page to an
+  uploaded image, stale cross-camera leads and labeling buttons must not linger.
+- Cards keep image, time, body similarity, and a one-line conclusion on the first layer; labels,
+  faces, and provenance appear only under expanded evidence details.
+- "Cross-camera leads" never implies a confirmed visit; only human feedback shows as manually
+  confirmed, and algorithm scores are not same-person probabilities.
+- Cameras carrying a reliable face keep their priority; frontend numeric re-sorting must not
+  override it, and results within one camera preserve API order.
+- Candidate images render at equal height without nested scroll boxes on narrow screens; every
+  main image zooms, Tab stays inside the preview, and Esc returns focus to the source button.
+- Empty face evidence never renders as "inconsistent", and fewer than two high-confidence labels
+  shows neutral instead of fabricating 100% agreement.
+
+The adopted scope, rejected suggestions, and residual risks of this review round are recorded in
+`docs/reid-fable5-review-20260905.md`.

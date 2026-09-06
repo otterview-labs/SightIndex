@@ -10,7 +10,22 @@
 
 ## 标注文件
 
-复制 `docs/reid-walkthrough-template.csv`，每行是一对抓拍：
+优先从观察表点「找相似」进入 ReID 页面，放大图片核对后，在每个候选上点「同一个人」或
+「不是同一个人」。同一查询图和候选图再次点击会更新原记录，不会重复追加；这些反馈只进入
+`reid_match_feedback` 校准表，**不会直接修改当前排序、阈值或 `person_id`**。
+
+页面右侧「导出全部标注」会下载 `reid-feedback.csv`，格式可直接传给评估脚本。也可以在服务器上导出：
+
+```bash
+curl -fsS -o data/reports/reid-feedback.csv \
+  http://127.0.0.1:18030/api/reid/feedback/export.csv
+```
+
+CSV 同时保留点击当时的人体分数、人脸相似度与可靠性、标签一致计数、融合分数和判定说明。评估脚本仍会
+从当前模型和数据库重新计算核心分数；因此可以对比“当时页面证据”和“更新模型后的证据”，避免阈值或模型
+变化后无法解释旧标注。
+
+如果需要先离线组织现场编号和备注，也可以复制 `docs/reid-walkthrough-template.csv`。每行是一对抓拍：
 
 - `query_crop_id`：查询抓拍。
 - `candidate_crop_id`：候选抓拍。
@@ -25,7 +40,7 @@
 ```bash
 cd /opt/sightindex
 .venv/bin/python scripts/evaluate_reid_walkthrough.py \
-  docs/reid-walkthrough-labels.csv \
+  data/reports/reid-feedback.csv \
   --output data/reports/reid-calibration-report.json
 ```
 

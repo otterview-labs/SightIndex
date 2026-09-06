@@ -1,7 +1,52 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from app.schemas.common import ORMModel
+
+ReidFeedbackSource = Literal["search", "camera_link"]
+ReidEvidenceLevel = Literal["reliable", "similar", "clue", "rejected"]
+
+
+class ReidFeedbackUpsert(BaseModel):
+    query_crop_id: uuid.UUID
+    candidate_crop_id: uuid.UUID
+    same_person: bool
+    source: ReidFeedbackSource = "search"
+    body_score: float | None = Field(default=None, ge=-1.0, le=1.0)
+    face_similarity: float | None = Field(default=None, ge=-1.0, le=1.0)
+    face_reliability: float | None = Field(default=None, ge=0.0, le=1.0)
+    face_match: bool | None = None
+    attribute_agreement: float | None = Field(default=None, ge=0.0, le=1.0)
+    attribute_comparable_count: int = Field(default=0, ge=0, le=20)
+    attribute_match_count: int = Field(default=0, ge=0, le=20)
+    attribute_conflict_count: int = Field(default=0, ge=0, le=20)
+    fusion_score: float | None = Field(default=None, ge=-2.0, le=2.0)
+    evidence_level: ReidEvidenceLevel | None = None
+    decision_reason: str | None = Field(default=None, max_length=500)
+
+
+class ReidFeedbackRead(ORMModel):
+    id: uuid.UUID
+    query_crop_id: uuid.UUID
+    candidate_crop_id: uuid.UUID
+    same_person: bool
+    source: ReidFeedbackSource
+    body_score: float | None
+    face_similarity: float | None
+    face_reliability: float | None
+    face_match: bool | None
+    attribute_agreement: float | None
+    attribute_comparable_count: int
+    attribute_match_count: int
+    attribute_conflict_count: int
+    fusion_score: float | None
+    evidence_level: ReidEvidenceLevel | None
+    decision_reason: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ReidMatchItem(BaseModel):
@@ -29,13 +74,16 @@ class ReidMatchItem(BaseModel):
     attribute_conflict_count: int = 0
     attribute_evidence_weight: float | None = None
     attribute_conflict_weight: float | None = None
-    # Face evidence is optional: None means one side had no reliable face. True gets the highest
-    # rank; False is shown as contrary evidence but does not delete a body match by itself.
+    # Face evidence is optional: None also covers uncertainty/unverified query identity. True
+    # gets the highest rank; measured False conflicts below the configured hard gate are omitted.
     face_similarity: float | None = None
     face_match: bool | None = None
     face_query_quality: float | None = None
     face_candidate_quality: float | None = None
     face_reliability: float | None = None
+    face_query_identity_verified: bool | None = None
+    face_candidate_identity_verified: bool | None = None
+    face_candidate_source_crop_id: uuid.UUID | None = None
     # Backend-owned explanation of the final ordering.  This is deliberately a score, not a
     # probability: calibration has not yet shown that 0.7 means a 70% identity likelihood.
     fusion_score: float | None = None
@@ -45,6 +93,34 @@ class ReidMatchItem(BaseModel):
     frame_count: int = 1
     first_seen: datetime | None = None
     last_seen: datetime | None = None
+    # Internal, identity-checked members only; never accept/expose a guessed camera track.
+    occurrence_crop_ids: list[uuid.UUID] = Field(default_factory=list, exclude=True)
+
+
+class ReidFaceCoverage(BaseModel):
+    """Per-request face work before final admission, not a global model health claim."""
+
+    status: Literal[
+        "disabled",
+        "unavailable",
+        "no_candidates",
+        "query_unavailable",
+        "candidate_unavailable",
+        "compared",
+        "error",
+    ] = "no_candidates"
+    query_face_found: bool = False
+    query_face_quality: float | None = None
+    query_identity_verified: bool = False
+    query_attempted_count: int = 0
+    candidate_attempted_count: int = 0
+    shortlist_count: int = 0
+    compared_count: int = 0
+    borrowed_candidate_count: int = 0
+    hard_match_count: int = 0
+    hard_conflict_count: int = 0
+    query_absence_reasons: dict[str, int] = Field(default_factory=dict)
+    candidate_absence_reasons: dict[str, int] = Field(default_factory=dict)
 
 
 class ReidSearchResponse(BaseModel):
@@ -54,6 +130,7 @@ class ReidSearchResponse(BaseModel):
     collapse_window_seconds: float = 0.0
     query_mode: str = "single_frame"
     query_frame_count: int = 1
+    face_coverage: ReidFaceCoverage = Field(default_factory=ReidFaceCoverage)
 
 
 class ReidCameraLink(BaseModel):
@@ -85,6 +162,9 @@ class ReidCameraLink(BaseModel):
     face_query_quality: float | None = None
     face_candidate_quality: float | None = None
     face_reliability: float | None = None
+    face_query_identity_verified: bool | None = None
+    face_candidate_identity_verified: bool | None = None
+    face_candidate_source_crop_id: uuid.UUID | None = None
     fusion_score: float | None = None
     evidence_level: str | None = None
     decision_reason: str | None = None
@@ -104,6 +184,7 @@ class ReidLinkResponse(BaseModel):
     chance_ceiling: float
     query_mode: str = "single_frame"
     query_frame_count: int = 1
+    face_coverage: ReidFaceCoverage = Field(default_factory=ReidFaceCoverage)
 
 
 class ReidStatusResponse(BaseModel):
@@ -128,6 +209,7 @@ class ReidStatusResponse(BaseModel):
     indexed_crops: int
     pending_crops: int
     min_score: float
+    min_score_cross_camera: float = 0.0
     attribute_filter_enabled: bool = False
     attribute_min_confidence: float = 0.0
     attribute_hard_conflicts: int = 0
@@ -143,6 +225,7 @@ class ReidStatusResponse(BaseModel):
     face_candidate_limit: int = 0
     face_min_quality: float = 0.0
     face_strong_reliability: float = 0.0
+    face_rescue_min_body_score: float = 0.0
 
 
 class ReidRebuildResponse(BaseModel):

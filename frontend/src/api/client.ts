@@ -16,6 +16,8 @@ import type {
   PersonCropRead,
   PersonTrajectoryResponse,
   ReidRebuildResponse,
+  ReidFeedbackRead,
+  ReidFeedbackUpsert,
   ReidLinkResponse,
   ReidSearchResponse,
   ReidStatusResponse,
@@ -189,6 +191,20 @@ export const face = {
 
 export const reid = {
   status: () => api<ReidStatusResponse>("/api/reid/status"),
+  feedback: (queryCropId: string) =>
+    api<ReidFeedbackRead[]>(
+      `/api/reid/feedback${queryString({ query_crop_id: queryCropId })}`,
+    ),
+  saveFeedback: (
+    payload: RequestBody<
+      ReidFeedbackUpsert,
+      "query_crop_id" | "candidate_crop_id" | "same_person"
+    >,
+  ) =>
+    api<ReidFeedbackRead>("/api/reid/feedback", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   search: (body: FormData, topK?: number, signal?: AbortSignal) =>
     api<ReidSearchResponse>(`/api/reid/search${queryString({ top_k: topK })}`, {
       method: "POST",

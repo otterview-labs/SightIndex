@@ -1,9 +1,13 @@
+import hashlib
+import json
 import logging
 import math
+import re
 import tempfile
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -17,8 +21,9 @@ from app.face_algorithms import InsightFaceCudaRecognizer
 from app.models.events import RecognitionEvent
 from app.models.media import Image, PersonCrop
 from app.models.persons import Person
-from app.models.vectors import FaceEmbedding
+from app.models.vectors import CropFaceExtraction, FaceEmbedding
 from app.schemas.persons import FaceMatchItem, FaceRecognitionResponse, FaceSearchResponse
+from app.schemas.reid import ReidFaceCoverage
 from app.services.observation_index import ObservationIndexService
 from app.services.storage import StorageService
 from app.services.time_utils import local_now
@@ -31,6 +36,50 @@ except ImportError:  # pragma: no cover - only hit when numpy is not installed
 
 logger = logging.getLogger(__name__)
 
+_CACHEABLE_ABSENCES = frozenset(
+    {
+        "no_face",
+        "multiple_faces",
+        "face_outside_head",
+        "invalid_bbox",
+    }
+)
+
+
+def _canonical_face_model(model: str) -> str:
+    """Read legacy resize annotations without confusing them with recognition weights."""
+    return re.sub(r"-upscaled-\d+(?:\.\d+)?x$", "", model)
+
+
+def face_extraction_errors() -> tuple[type[Exception], ...]:
+    """Optional OpenCV failures are recoverable; do not import it during API health checks."""
+    errors: tuple[type[Exception], ...] = (OSError, RuntimeError, ValueError, ImportError)
+    try:
+        import cv2
+    except ImportError:
+        return errors
+    return (*errors, cv2.error)
+
+
+def _valid_face_embedding(candidate: "FaceCandidate") -> bool:
+    values = candidate.embedding
+    return (
+        bool(values)
+        and all(
+            isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+            for value in values
+        )
+        and any(values)
+    )
+
+
+def _same_face_space(left: "FaceCandidate", right: "FaceCandidate") -> bool:
+    return (
+        bool(left.model)
+        and _canonical_face_model(left.model) == _canonical_face_model(right.model)
+        and len(left.embedding) == len(right.embedding)
+    )
+
 
 @dataclass(frozen=True)
 class FaceCandidate:
@@ -38,6 +87,8 @@ class FaceCandidate:
     bbox: dict[str, float]
     quality_score: float
     model: str
+    landmarks: list[list[float]] | None = None
+    preprocessing_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -52,6 +103,10 @@ class FaceCropComparison:
     similarity: float
     query_quality: float
     candidate_quality: float
+    # A clear face borrowed from a body tracklet is not automatically the clicked person's face.
+    query_identity_verified: bool = True
+    candidate_identity_verified: bool = True
+    candidate_source_crop_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +189,77 @@ class FaceRecognitionService:
         self.db = db
         self.settings = settings
         self.storage = StorageService(settings)
+        self.coverage = ReidFaceCoverage()
+        self.candidate_occurrences: dict[uuid.UUID, list[PersonCrop]] = {}
+        # A service is request-local and comparisons are synchronous. Reset before each
+        # extraction so an earlier failure cannot leak into the following crop's cache row.
+        self._extraction_absence_reason: str | None = None
+        self._comparison_faces: dict[uuid.UUID, tuple[FaceCandidate | None, str | None]] = {}
+
+    def _begin_face_comparison(self) -> None:
+        self.coverage = ReidFaceCoverage()
+        self._comparison_faces = {}
+
+    def _abstain(self, reason: str) -> None:
+        self._extraction_absence_reason = reason
+
+    def _record_absence(self, reason: str, *, query: bool) -> None:
+        reasons = (
+            self.coverage.query_absence_reasons
+            if query
+            else self.coverage.candidate_absence_reasons
+        )
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    def _comparison_candidate(
+        self,
+        crop: PersonCrop,
+        *,
+        min_quality: float,
+        query: bool,
+    ) -> FaceCandidate | None:
+        """Measure each crop once per request, keeping abstention separate from mismatch."""
+        if crop.id not in self._comparison_faces:
+            self._extraction_absence_reason = None
+            try:
+                candidate = self._cached_strict_candidate(crop)
+            except face_extraction_errors():
+                logger.warning("Strict ReID face extraction failed; will retry", exc_info=True)
+                candidate = None
+                self._extraction_absence_reason = "inference_error"
+            self._comparison_faces[crop.id] = (candidate, self._extraction_absence_reason)
+        candidate, reason = self._comparison_faces[crop.id]
+        if query:
+            self.coverage.query_attempted_count += 1
+        else:
+            self.coverage.candidate_attempted_count += 1
+        if candidate is None:
+            self._record_absence(reason or "extraction_unexplained", query=query)
+            return None
+        if not _valid_face_embedding(candidate) or not math.isfinite(candidate.quality_score):
+            self._record_absence("invalid_embedding", query=query)
+            return None
+        if query:
+            self.coverage.query_face_quality = max(
+                self.coverage.query_face_quality or 0.0,
+                candidate.quality_score,
+            )
+        if candidate.quality_score < min_quality:
+            self._record_absence("low_quality", query=query)
+            return None
+        return candidate
+
+    def _set_query_face(self, face: FaceCandidate | None, *, verified: bool = False) -> None:
+        self.coverage.query_face_found = face is not None
+        self.coverage.query_identity_verified = verified
+        if face is not None:
+            self.coverage.query_face_quality = face.quality_score
+        else:
+            self.coverage.status = (
+                "error"
+                if "inference_error" in self.coverage.query_absence_reasons
+                else "query_unavailable"
+            )
 
     def enroll_person_face(self, person: Person, file: UploadFile) -> FaceEmbedding:
         image_url = self.storage.save_upload(file)
@@ -241,14 +367,21 @@ class FaceRecognitionService:
         degrade to body and attribute evidence instead of treating "no face" as a mismatch.
         """
 
-        query_path = self._resolve_data_url(query.crop_url)
-        if query_path is None or not query_path.exists():
-            return {}
-        return self.compare_image_to_crops(
-            query_path,
-            candidates,
-            min_quality=min_quality,
+        self._begin_face_comparison()
+        query_face = self._comparison_candidate(query, min_quality=min_quality, query=True)
+        verified = (
+            query_face is not None
+            and query_face.quality_score >= self.settings.reid_face_strong_reliability
         )
+        self._set_query_face(query_face, verified=verified)
+        if query_face is None:
+            self._commit_crop_face_cache()
+            return {}
+        compared = self._compare_face_to_crops(query_face, candidates, min_quality=min_quality)
+        return {
+            crop_id: replace(comparison, query_identity_verified=verified)
+            for crop_id, comparison in compared.items()
+        }
 
     def compare_person_crop_gallery(
         self,
@@ -256,24 +389,58 @@ class FaceRecognitionService:
         candidates: list[PersonCrop],
         *,
         min_quality: float,
+        anchor: PersonCrop | None = None,
     ) -> dict[uuid.UUID, FaceCropComparison]:
-        """Use the clearest measurable face in a query tracklet.
+        """Choose a clearer face only with identity evidence anchored to the selected crop.
 
-        Doorway crops frequently alternate between frontal, profile and back views. Treating the
-        originally clicked frame as the only possible face made the advertised face priority
-        depend on luck; the body-verified tracklet is a safe place to choose a better view.
+        Body-similar neighbours can be different people. An available anchor face therefore
+        gates replacements by face similarity. When the anchor is missing or weak, a borrowed
+        face remains a bounded soft signal and cannot rescue or hard-reject an identity.
         """
 
-        best: FaceCandidate | None = None
+        self._begin_face_comparison()
+        source = anchor if anchor is not None else (queries[0] if queries else None)
+        source_face = (
+            self._comparison_candidate(source, min_quality=min_quality, query=True)
+            if source is not None
+            else None
+        )
+        identity_verified = (
+            source_face is not None
+            and source_face.quality_score >= self.settings.reid_face_strong_reliability
+        )
+        best = source_face
+        seen = {source.id} if source is not None else set()
         for crop in queries:
-            candidate = self._best_candidate(crop.crop_url, allow_fallback=False)
-            if candidate is None or candidate.quality_score < min_quality:
+            if crop.id in seen:
+                continue
+            seen.add(crop.id)
+            candidate = self._comparison_candidate(crop, min_quality=min_quality, query=True)
+            if candidate is None:
+                continue
+            if source_face is not None and (
+                not _same_face_space(candidate, source_face)
+                or self._cosine_similarity(source_face.embedding, candidate.embedding)
+                < self.settings.face_match_threshold
+            ):
+                self._record_absence(
+                    "model_incompatible"
+                    if not _same_face_space(candidate, source_face)
+                    else "query_identity_unverified",
+                    query=True,
+                )
                 continue
             if best is None or candidate.quality_score > best.quality_score:
                 best = candidate
+        self._set_query_face(best, verified=identity_verified)
         if best is None:
+            self._commit_crop_face_cache()
             return {}
-        return self._compare_face_to_crops(best, candidates, min_quality=min_quality)
+        compared = self._compare_face_to_crops(best, candidates, min_quality=min_quality)
+        return {
+            crop_id: replace(comparison, query_identity_verified=identity_verified)
+            for crop_id, comparison in compared.items()
+        }
 
     def compare_image_to_crops(
         self,
@@ -282,10 +449,38 @@ class FaceRecognitionService:
         *,
         min_quality: float,
     ) -> dict[uuid.UUID, FaceCropComparison]:
-        query_face = self._best_candidate_path(query_path, allow_fallback=False)
-        if query_face is None or query_face.quality_score < min_quality:
+        self._begin_face_comparison()
+        self._extraction_absence_reason = None
+        self.coverage.query_attempted_count = 1
+        try:
+            query_face = self._best_candidate_path(query_path, allow_fallback=False)
+        except face_extraction_errors():
+            logger.warning("Strict ReID upload face extraction failed", exc_info=True)
+            self._record_absence("inference_error", query=True)
+            self._set_query_face(None)
             return {}
-        return self._compare_face_to_crops(query_face, candidates, min_quality=min_quality)
+        if query_face is not None:
+            self.coverage.query_face_quality = query_face.quality_score
+        reason = self._extraction_absence_reason or "extraction_unexplained"
+        if query_face is not None and (
+            not _valid_face_embedding(query_face) or not math.isfinite(query_face.quality_score)
+        ):
+            query_face, reason = None, "invalid_embedding"
+        if query_face is not None and query_face.quality_score < min_quality:
+            query_face, reason = None, "low_quality"
+        verified = (
+            query_face is not None
+            and query_face.quality_score >= self.settings.reid_face_strong_reliability
+        )
+        self._set_query_face(query_face, verified=verified)
+        if query_face is None:
+            self._record_absence(reason, query=True)
+            return {}
+        compared = self._compare_face_to_crops(query_face, candidates, min_quality=min_quality)
+        return {
+            crop_id: replace(comparison, query_identity_verified=verified)
+            for crop_id, comparison in compared.items()
+        }
 
     def _compare_face_to_crops(
         self,
@@ -296,10 +491,31 @@ class FaceRecognitionService:
     ) -> dict[uuid.UUID, FaceCropComparison]:
         compared: dict[uuid.UUID, FaceCropComparison] = {}
         for crop in candidates:
-            candidate_face = self._best_candidate(crop.crop_url, allow_fallback=False)
-            if candidate_face is None or candidate_face.quality_score < min_quality:
+            candidate_face = self._comparison_candidate(crop, min_quality=min_quality, query=False)
+            source_id = crop.id
+            candidate_verified = True
+            if candidate_face is None:
+                # Collapse already checked complete-link body similarity. It is still not face
+                # identity proof: a borrowed member may nudge ranking, never hard rescue/reject.
+                seen = {crop.id}
+                for peer in self.candidate_occurrences.get(crop.id, []):
+                    if peer.id in seen:
+                        continue
+                    seen.add(peer.id)
+                    if len(seen) > 3:
+                        break
+                    face = self._comparison_candidate(peer, min_quality=min_quality, query=False)
+                    if face is None:
+                        continue
+                    if not _same_face_space(query_face, face):
+                        self._record_absence("model_incompatible", query=False)
+                        continue
+                    if candidate_face is None or face.quality_score > candidate_face.quality_score:
+                        candidate_face, source_id, candidate_verified = face, peer.id, False
+            if candidate_face is None:
                 continue
-            if len(candidate_face.embedding) != len(query_face.embedding):
+            if not _same_face_space(candidate_face, query_face):
+                self._record_absence("model_incompatible", query=False)
                 continue
             compared[crop.id] = FaceCropComparison(
                 similarity=self._cosine_similarity(
@@ -308,8 +524,225 @@ class FaceRecognitionService:
                 ),
                 query_quality=query_face.quality_score,
                 candidate_quality=candidate_face.quality_score,
+                candidate_identity_verified=candidate_verified,
+                candidate_source_crop_id=source_id,
             )
+        self.coverage.compared_count = len(compared)
+        self.coverage.borrowed_candidate_count = sum(
+            not comparison.candidate_identity_verified for comparison in compared.values()
+        )
+        self.coverage.status = "compared" if compared else "candidate_unavailable"
+        self._commit_crop_face_cache()
         return compared
+
+    def _cached_strict_candidate(self, crop: PersonCrop) -> FaceCandidate | None:
+        """Strict (no-fallback) face extraction for a crop, cached across requests.
+
+        Every caller of this method extracts with ``allow_fallback=False``, so a cache hit
+        under the current extractor signature is exactly what a fresh extraction would return.
+        The row is staged on ``self.db`` but not committed here; callers commit once after their
+        loop via ``_commit_crop_face_cache`` so a multi-crop comparison costs one write, not one
+        per crop.
+        """
+
+        self._extraction_absence_reason = None
+        signature = self._face_extraction_signature()
+        cached = self.db.get(CropFaceExtraction, crop.id)
+        fingerprint = self._face_input_fingerprint(crop)
+        if cached is not None and cached.signature == signature:
+            if cached.embedding is not None:
+                candidate = FaceCandidate(
+                    embedding=list(cached.embedding),
+                    bbox=dict(cached.face_bbox) if cached.face_bbox else {},
+                    quality_score=(
+                        float(cached.quality_score) if cached.quality_score is not None else 0.0
+                    ),
+                    model=_canonical_face_model(cached.face_model or ""),
+                )
+                if (
+                    _valid_face_embedding(candidate)
+                    and math.isfinite(candidate.quality_score)
+                    and cached.input_fingerprint in (None, fingerprint)
+                ):
+                    return candidate
+            elif (
+                cached.absence_reason in _CACHEABLE_ABSENCES
+                and cached.input_fingerprint == fingerprint
+                and self._negative_cache_is_fresh(cached)
+            ):
+                self._abstain(cached.absence_reason)
+                return None
+
+        candidate = self._identity_candidate_for_crop(crop)
+        if candidate is None and self._extraction_absence_reason not in _CACHEABLE_ABSENCES:
+            # Missing/unfinished files, disk failures and unexplained legacy negatives must
+            # never turn into permanent "no face" facts. They retry on the next request.
+            return None
+        if candidate is not None:
+            if not _valid_face_embedding(candidate) or not math.isfinite(candidate.quality_score):
+                self._abstain("invalid_embedding")
+                return None
+            candidate = replace(candidate, model=_canonical_face_model(candidate.model))
+        if cached is None:
+            cached = CropFaceExtraction(crop_id=crop.id)
+        cached.signature = signature
+        cached.absence_reason = self._extraction_absence_reason if candidate is None else None
+        cached.input_fingerprint = fingerprint
+        cached.embedding = candidate.embedding if candidate else None
+        cached.face_bbox = candidate.bbox if candidate else None
+        cached.quality_score = candidate.quality_score if candidate else None
+        cached.face_model = candidate.model if candidate else None
+        # Cache timestamps are UTC (including SQLite's offset-less TIMESTAMP adapter), unlike
+        # capture timestamps which deliberately use the configured local wall clock.
+        cached.updated_at = datetime.now(UTC)
+        self.db.add(cached)
+        return candidate
+
+    def _negative_cache_is_fresh(self, cached: CropFaceExtraction) -> bool:
+        stamp = cached.updated_at
+        if stamp is None:
+            return False
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - stamp).total_seconds()
+        return 0 <= age < self.settings.face_negative_cache_ttl_seconds
+
+    def _face_input_fingerprint(self, crop: PersonCrop) -> str:
+        """Invalidate a negative when source/geometry changes, without reading image bytes."""
+        image = self.db.get(Image, crop.image_id)
+        urls = [crop.crop_url, image.image_url if image else None]
+        stamps: list[object] = []
+        for url in urls:
+            path = self._resolve_data_url(url) if url else None
+            try:
+                stat = path.stat() if path else None
+                stamps.append((stat.st_size, stat.st_mtime_ns) if stat else None)
+            except OSError:
+                stamps.append(None)
+        payload = json.dumps([str(crop.image_id), crop.bbox, urls, stamps], sort_keys=True)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _identity_candidate_for_crop(self, crop: PersonCrop) -> FaceCandidate | None:
+        """Use the unenhanced target body rectangle; padded display crops may contain bystanders."""
+        box = crop.bbox or {}
+        if not isinstance(box, dict):
+            return self._abstain("invalid_bbox")
+        keys = ("x", "y", "width", "height")
+        if not any(key in box for key in keys):
+            # Legacy uploads without detector geometry can still be used, but strict extraction
+            # below abstains if multiple faces are detected.
+            return self._best_candidate(crop.crop_url, allow_fallback=False)
+        if (
+            not all(
+                isinstance(box.get(key), int | float)
+                and not isinstance(box[key], bool)
+                and math.isfinite(box[key])
+                for key in keys
+            )
+            or box["width"] <= 0
+            or box["height"] <= 0
+        ):
+            return self._abstain("invalid_bbox")
+        image = self.db.get(Image, crop.image_id)
+        path = self._resolve_data_url(image.image_url) if image else None
+        if image is not None and path is None:
+            return self._abstain("unsupported_url")
+        if path is None or not path.is_file():
+            return self._abstain("source_missing")
+        import cv2
+
+        frame = cv2.imread(str(path))
+        if frame is None:
+            return self._abstain("source_unreadable")
+        height, width = frame.shape[:2]
+        x1, y1 = max(0, int(box["x"])), max(0, int(box["y"]))
+        x2 = min(width, int(box["x"] + box["width"]))
+        y2 = min(height, int(box["y"] + box["height"]))
+        if x2 <= x1 or y2 <= y1:
+            return self._abstain("invalid_bbox")
+        with tempfile.TemporaryDirectory(prefix="sightindex-target-face-") as directory:
+            target = Path(directory) / "body.png"
+            if not cv2.imwrite(str(target), frame[y1:y2, x1:x2]):
+                return self._abstain("temp_write_failed")
+            candidate = self._best_candidate_path(target, allow_fallback=False)
+        if candidate is None:
+            return None
+        # A face in the lower part of a detected body cannot be safely associated with its head.
+        if candidate.bbox["y"] + candidate.bbox["height"] / 2 > (y2 - y1) * 0.6:
+            return self._abstain("face_outside_head")
+        return candidate
+
+    def _face_extraction_signature(self) -> str:
+        """Fingerprint of everything that changes a strict extraction's output.
+
+        A settings change naturally invalidates stale rows: the signature just stops matching,
+        so they are overwritten on next use instead of requiring an explicit cache-bust step.
+        """
+
+        provider = self.settings.face_embedding_provider.strip().lower()
+        if provider != "insightface":
+            return provider
+        return (
+            f"identity-v2:insightface:{self.settings.face_insightface_model}:"
+            f"{self.settings.face_insightface_det_size}:"
+            f"{self.settings.face_candidate_upscale_min_width}:"
+            f"{self.settings.face_candidate_upscale_min_height}:"
+            f"{self.settings.face_candidate_upscale_max_factor}:"
+            f"{self.settings.face_identity_min_pixels}:"
+            f"{self.settings.face_identity_min_sharpness}"
+        )
+
+    def _commit_crop_face_cache(self) -> None:
+        """Upsert staged cache rows so concurrent search/links cannot collide on cold crops.
+
+        Keep the existing request-transaction boundary. Only replace the cache's ORM inserts
+        with an atomic conflict handler; do not merge(), which still races on INSERT.
+        """
+        try:
+            dialect = self.db.get_bind().dialect.name
+            if dialect in ("sqlite", "postgresql"):
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                staged = [
+                    row
+                    for row in list(self.db.new) + list(self.db.dirty)
+                    if isinstance(row, CropFaceExtraction)
+                ]
+                payloads = {}
+                for row in staged:
+                    payloads[row.crop_id] = {
+                        "crop_id": row.crop_id,
+                        "signature": row.signature,
+                        "absence_reason": row.absence_reason,
+                        "input_fingerprint": row.input_fingerprint,
+                        "embedding": row.embedding,
+                        "face_bbox": row.face_bbox,
+                        "quality_score": row.quality_score,
+                        "face_model": row.face_model,
+                        "updated_at": row.updated_at or datetime.now(UTC),
+                    }
+                for row in staged:
+                    if row in self.db.new:
+                        self.db.expunge(row)
+                    else:
+                        self.db.expire(row)
+                if payloads:
+                    insert = sqlite_insert if dialect == "sqlite" else pg_insert
+                    statement = insert(CropFaceExtraction).values(list(payloads.values()))
+                    statement = statement.on_conflict_do_update(
+                        index_elements=["crop_id"],
+                        set_={
+                            key: getattr(statement.excluded, key)
+                            for key in next(iter(payloads.values()))
+                            if key != "crop_id"
+                        },
+                    )
+                    self.db.execute(statement)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.warning("Failed to persist crop face extraction cache", exc_info=True)
 
     def recognize_upload(
         self,
@@ -702,8 +1135,10 @@ class FaceRecognitionService:
 
     def _best_candidate(self, data_url: str, allow_fallback: bool) -> FaceCandidate | None:
         image_path = self._resolve_data_url(data_url)
-        if image_path is None or not image_path.exists():
-            return None
+        if image_path is None:
+            return self._abstain("unsupported_url")
+        if not image_path.is_file():
+            return self._abstain("source_missing")
         return self._best_candidate_path(image_path, allow_fallback=allow_fallback)
 
     def _best_candidate_path(
@@ -712,10 +1147,58 @@ class FaceRecognitionService:
         *,
         allow_fallback: bool,
     ) -> FaceCandidate | None:
+        self._extraction_absence_reason = None
+        if not allow_fallback:
+            import cv2
+
+            if not image_path.is_file():
+                return self._abstain("source_missing")
+            if cv2.imread(str(image_path)) is None:
+                return self._abstain("source_unreadable")
         candidates = self._extract_candidates(image_path, allow_fallback=allow_fallback)
         if not candidates:
-            return None
+            return self._abstain("no_face")
+        if not allow_fallback:
+            if len(candidates) != 1:
+                return self._abstain("multiple_faces")
+            candidate = self._identity_quality(image_path, candidates[0])
+            return candidate if self._extraction_absence_reason is None else None
         return max(candidates, key=lambda item: item.quality_score)
+
+    def _identity_quality(self, path: Path, candidate: FaceCandidate) -> FaceCandidate:
+        """Bound detection confidence by original pixels, sharpness and landmark symmetry.
+
+        These are conservative evidence gates, not a probability of correct identity. Bboxes
+        have already been mapped back from any detector upscale, so resizing cannot add quality.
+        """
+        import cv2
+
+        image = cv2.imread(str(path))
+        if image is None:
+            self._abstain("source_unreadable")
+            return replace(candidate, quality_score=0.0)
+        box = candidate.bbox
+        x, y = max(0, int(box["x"])), max(0, int(box["y"]))
+        face = image[y : int(y + box["height"]), x : int(x + box["width"])]
+        if face.size == 0:
+            return replace(candidate, quality_score=0.0)
+        pixels = min(face.shape[:2]) / self.settings.face_identity_min_pixels
+        gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        pose = 0.54  # missing landmarks cannot supply hard identity evidence
+        points = candidate.landmarks
+        if points and len(points) >= 3:
+            left, right, nose = points[:3]
+            a = math.dist(left, nose)
+            b = math.dist(right, nose)
+            pose = min(a, b) / max(a, b) if max(a, b) > 0 else 0.0
+        quality = min(
+            candidate.quality_score,
+            pixels,
+            sharpness / self.settings.face_identity_min_sharpness,
+            pose,
+        )
+        return replace(candidate, quality_score=max(0.0, min(1.0, quality)))
 
     def _extract_candidates(self, image_path: Path, allow_fallback: bool) -> list[FaceCandidate]:
         provider = self.settings.face_embedding_provider.lower()
@@ -752,6 +1235,8 @@ class FaceRecognitionService:
                 finally:
                     upscaled_path.unlink(missing_ok=True)
                 if upscaled_candidates:
+                    if not allow_fallback and (len(candidates) > 1 or len(upscaled_candidates) > 1):
+                        return candidates if len(candidates) > 1 else upscaled_candidates
                     candidates = self._best_candidates_by_quality(
                         candidates,
                         upscaled_candidates,
@@ -812,7 +1297,13 @@ class FaceRecognitionService:
                         "height": max(1.0, float(bbox.get("height", 1.0)) / scale),
                     },
                     quality_score=candidate.quality_score,
-                    model=f"{candidate.model}{model_suffix}",
+                    model=_canonical_face_model(candidate.model),
+                    preprocessing_scale=scale,
+                    landmarks=(
+                        [[float(x) / scale, float(y) / scale] for x, y in candidate.landmarks]
+                        if getattr(candidate, "landmarks", None)
+                        else None
+                    ),
                 )
             )
         return candidates

@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     face_candidate_upscale_min_width: int = Field(default=480, ge=0, le=4096)
     face_candidate_upscale_min_height: int = Field(default=720, ge=0, le=4096)
     face_candidate_upscale_max_factor: float = Field(default=3.0, ge=1.0, le=6.0)
+    face_identity_min_pixels: int = Field(default=64, ge=16, le=256)
+    face_identity_min_sharpness: float = Field(default=80.0, gt=0)
+    face_negative_cache_ttl_seconds: int = Field(default=300, ge=1, le=86400)
+    vlm_structured_background: bool = False
     face_recognition_on_ingest: bool = True
     face_fallback_to_full_image: bool = True
     face_max_library_scan: int = Field(default=5000, ge=1, le=100000)
@@ -260,6 +264,11 @@ class Settings(BaseSettings):
     reid_face_candidate_limit: int = Field(default=12, ge=1, le=100)
     reid_face_min_quality: float = Field(default=0.55, ge=0.0, le=1.0)
     reid_face_strong_reliability: float = Field(default=0.70, ge=0.0, le=1.0)
+    # Keep a narrow body-score rescue band for face verification. Previously candidates had to
+    # clear the body-only threshold before face extraction ran, so a clear matching face could
+    # never rescue a person whose clothes or pose changed across cameras. Candidates in this
+    # band are returned only when a reliable face match confirms them.
+    reid_face_rescue_min_body_score: float = Field(default=0.30, ge=0.0, le=1.0)
     # A score below this is not merely "unconfirmed"; both high-quality faces were measurable
     # and they are clearly different. Reject it from the match list instead of letting similar
     # clothing keep an acknowledged face mismatch alive. Scores between this and the ordinary

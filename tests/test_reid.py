@@ -77,6 +77,8 @@ def test_status_separates_configured_from_ready(monkeypatch, tmp_path):
     assert payload["checkpoint_revision"].startswith("sha256:")
     assert payload["milvus_namespace"].startswith("endpoint-")
     assert payload["index_fingerprint"].startswith("sapiensid_wb12m|sha256:")
+    assert payload["min_score_cross_camera"] == 0.45
+    assert payload["face_rescue_min_body_score"] == 0.30
 
 
 def test_reid_status_reports_disabled_without_configuration(monkeypatch, tmp_path):
@@ -525,7 +527,10 @@ def test_similar_to_crop_drops_the_query_before_collapsing(monkeypatch, tmp_path
     assert [item["frame_count"] for item in payload["items"]] == [1, 1, 1]
 
 
-def test_matches_are_placed_even_before_the_observation_row_lands(monkeypatch, tmp_path):
+@pytest.mark.parametrize("vectors_available", [True, False])
+def test_matches_are_placed_even_before_the_observation_row_lands(
+    monkeypatch, tmp_path, vectors_available,
+):
     """The observation row trails ingest by seconds; the freshest crops must still collapse."""
 
     main = load_app(
@@ -550,6 +555,15 @@ def test_matches_are_placed_even_before_the_observation_row_lands(monkeypatch, t
     camera_id = uuid.uuid4()
     captured = datetime(2026, 8, 24, 11, 4, 0)
     crop_ids: list[uuid.UUID] = []
+
+    def fetch_identity_vectors(self, object_type, object_ids):
+        from app.services.vector_index import VectorIndexError
+
+        if not vectors_available:
+            raise VectorIndexError("synthetic identity-vector outage")
+        return {crop_id: [1.0, 0.0] for crop_id in object_ids}
+
+    monkeypatch.setattr(MilvusVectorIndex, "fetch_vectors", fetch_identity_vectors)
 
     monkeypatch.setattr(MilvusVectorIndex, "is_enabled", lambda self: True)
     monkeypatch.setattr(
@@ -601,9 +615,12 @@ def test_matches_are_placed_even_before_the_observation_row_lands(monkeypatch, t
 
     assert response.status_code == 200
     items = response.json()["items"]
-    # One visit, not three unplaceable frames.
-    assert len(items) == 1
-    assert items[0]["frame_count"] == 3
+    # Metadata remains placed even without vectors, but co-location alone is not identity.
+    assert len(items) == (1 if vectors_available else 3)
+    assert sum(item["frame_count"] for item in items) == 3
+    assert items[0]["frame_count"] == (3 if vectors_available else 1)
+    assert all("occurrence_crop_ids" not in item for item in items)
+    assert "face_coverage" in response.json()
     assert items[0]["camera_name"] == "项目部门口"
     assert items[0]["location_name"] == "研发中心 3F 项目部"
     assert items[0]["first_seen"].startswith("2026-08-24T11:04:00")

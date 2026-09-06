@@ -8,6 +8,7 @@ import CountingLineCanvas, {
   lineToPoints,
   pointsToLine,
 } from "@/components/CountingLineCanvas.vue";
+import EmptyState from "@/components/EmptyState.vue";
 import FileField from "@/components/FileField.vue";
 import StreamItem from "@/components/StreamItem.vue";
 import { useSummary } from "@/composables/useSummary";
@@ -534,9 +535,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="media-grid" :class="{ hidden: mediaView !== 'crops' }">
-        <div v-if="!crops.length" class="empty">
-          <strong>还没有人物裁剪</strong>
-        </div>
+        <EmptyState v-if="!crops.length" title="还没有人物裁剪" />
         <a
           v-for="crop in crops"
           :key="crop.id"
@@ -564,9 +563,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="media-grid" :class="{ hidden: mediaView !== 'frames' }">
-        <div v-if="!images.length" class="empty">
-          <strong>还没有原帧</strong>
-        </div>
+        <EmptyState v-if="!images.length" title="还没有原帧" />
         <a
           v-for="image in images"
           :key="image.id"
@@ -612,9 +609,7 @@ onBeforeUnmount(() => {
         <span class="source-count-text">在线状态</span>
       </div>
       <div class="stream-list">
-        <div v-if="!streams.length" class="empty">
-          <strong>还没有视频流</strong>
-        </div>
+        <EmptyState v-if="!streams.length" title="还没有视频流" />
         <StreamItem
           v-for="stream in streams"
           :key="stream.id"

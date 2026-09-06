@@ -123,6 +123,13 @@ class VideoStream(Base):
         GUID(), ForeignKey("images.id"), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_frame_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consecutive_read_failures: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

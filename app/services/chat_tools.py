@@ -130,9 +130,7 @@ class PersonTrajectoryTool:
             start_time=start_time,
             mode=mode,
         )
-        items: list[dict[str, Any]] = []
-        for point in points:
-            items.append(_trajectory_point_item(point))
+        items: list[dict[str, Any]] = [_trajectory_point_item(point) for point in points]
 
         person_profile = _person_profile(person)
         mode_text = {"all": "人脸 + 向量", "face": "人脸", "vector": "向量"}[mode]

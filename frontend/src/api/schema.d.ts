@@ -546,6 +546,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reid/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reid Feedback */
+        get: operations["list_reid_feedback_api_reid_feedback_get"];
+        /**
+         * Save Reid Feedback
+         * @description Creates or replaces the human verdict for one directed crop pair.
+         *
+         *     The label is calibration input only. It does not modify crop identity, search thresholds or
+         *     current ranking, so an accidental click cannot contaminate live results.
+         */
+        put: operations["save_reid_feedback_api_reid_feedback_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reid/feedback/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Reid Feedback
+         * @description Exports labels in the format consumed by evaluate_reid_walkthrough.py.
+         */
+        get: operations["export_reid_feedback_api_reid_feedback_export_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reid/status": {
         parameters: {
             query?: never;
@@ -637,6 +681,43 @@ export interface paths {
         put?: never;
         /** Reid Rebuild */
         post: operations["reid_rebuild_api_reid_index_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attributes/jobs/{crop_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Attribute Job */
+        post: operations["retry_attribute_job_api_attributes_jobs__crop_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attributes/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Attribute Jobs
+         * @description Live coverage plus durable failures; an old backfill checkpoint is not live coverage.
+         */
+        get: operations["attribute_jobs_api_attributes_jobs_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1970,6 +2051,12 @@ export interface components {
             face_candidate_quality?: number | null;
             /** Face Reliability */
             face_reliability?: number | null;
+            /** Face Query Identity Verified */
+            face_query_identity_verified?: boolean | null;
+            /** Face Candidate Identity Verified */
+            face_candidate_identity_verified?: boolean | null;
+            /** Face Candidate Source Crop Id */
+            face_candidate_source_crop_id?: string | null;
             /** Fusion Score */
             fusion_score?: number | null;
             /** Evidence Level */
@@ -1982,6 +2069,182 @@ export interface components {
             captured_at?: string | null;
             /** Beats Chance */
             beats_chance: boolean;
+        };
+        /**
+         * ReidFaceCoverage
+         * @description Per-request face work before final admission, not a global model health claim.
+         */
+        ReidFaceCoverage: {
+            /**
+             * Status
+             * @default no_candidates
+             * @enum {string}
+             */
+            status: "disabled" | "unavailable" | "no_candidates" | "query_unavailable" | "candidate_unavailable" | "compared" | "error";
+            /**
+             * Query Face Found
+             * @default false
+             */
+            query_face_found: boolean;
+            /** Query Face Quality */
+            query_face_quality?: number | null;
+            /**
+             * Query Identity Verified
+             * @default false
+             */
+            query_identity_verified: boolean;
+            /**
+             * Query Attempted Count
+             * @default 0
+             */
+            query_attempted_count: number;
+            /**
+             * Candidate Attempted Count
+             * @default 0
+             */
+            candidate_attempted_count: number;
+            /**
+             * Shortlist Count
+             * @default 0
+             */
+            shortlist_count: number;
+            /**
+             * Compared Count
+             * @default 0
+             */
+            compared_count: number;
+            /**
+             * Borrowed Candidate Count
+             * @default 0
+             */
+            borrowed_candidate_count: number;
+            /**
+             * Hard Match Count
+             * @default 0
+             */
+            hard_match_count: number;
+            /**
+             * Hard Conflict Count
+             * @default 0
+             */
+            hard_conflict_count: number;
+            /** Query Absence Reasons */
+            query_absence_reasons?: {
+                [key: string]: number;
+            };
+            /** Candidate Absence Reasons */
+            candidate_absence_reasons?: {
+                [key: string]: number;
+            };
+        };
+        /** ReidFeedbackRead */
+        ReidFeedbackRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Query Crop Id
+             * Format: uuid
+             */
+            query_crop_id: string;
+            /**
+             * Candidate Crop Id
+             * Format: uuid
+             */
+            candidate_crop_id: string;
+            /** Same Person */
+            same_person: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "search" | "camera_link";
+            /** Body Score */
+            body_score: number | null;
+            /** Face Similarity */
+            face_similarity: number | null;
+            /** Face Reliability */
+            face_reliability: number | null;
+            /** Face Match */
+            face_match: boolean | null;
+            /** Attribute Agreement */
+            attribute_agreement: number | null;
+            /** Attribute Comparable Count */
+            attribute_comparable_count: number;
+            /** Attribute Match Count */
+            attribute_match_count: number;
+            /** Attribute Conflict Count */
+            attribute_conflict_count: number;
+            /** Fusion Score */
+            fusion_score: number | null;
+            /** Evidence Level */
+            evidence_level: ("reliable" | "similar" | "clue" | "rejected") | null;
+            /** Decision Reason */
+            decision_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ReidFeedbackUpsert */
+        ReidFeedbackUpsert: {
+            /**
+             * Query Crop Id
+             * Format: uuid
+             */
+            query_crop_id: string;
+            /**
+             * Candidate Crop Id
+             * Format: uuid
+             */
+            candidate_crop_id: string;
+            /** Same Person */
+            same_person: boolean;
+            /**
+             * Source
+             * @default search
+             * @enum {string}
+             */
+            source: "search" | "camera_link";
+            /** Body Score */
+            body_score?: number | null;
+            /** Face Similarity */
+            face_similarity?: number | null;
+            /** Face Reliability */
+            face_reliability?: number | null;
+            /** Face Match */
+            face_match?: boolean | null;
+            /** Attribute Agreement */
+            attribute_agreement?: number | null;
+            /**
+             * Attribute Comparable Count
+             * @default 0
+             */
+            attribute_comparable_count: number;
+            /**
+             * Attribute Match Count
+             * @default 0
+             */
+            attribute_match_count: number;
+            /**
+             * Attribute Conflict Count
+             * @default 0
+             */
+            attribute_conflict_count: number;
+            /** Fusion Score */
+            fusion_score?: number | null;
+            /** Evidence Level */
+            evidence_level?: ("reliable" | "similar" | "clue" | "rejected") | null;
+            /** Decision Reason */
+            decision_reason?: string | null;
         };
         /** ReidLinkResponse */
         ReidLinkResponse: {
@@ -2010,6 +2273,7 @@ export interface components {
              * @default 1
              */
             query_frame_count: number;
+            face_coverage?: components["schemas"]["ReidFaceCoverage"];
         };
         /** ReidMatchItem */
         ReidMatchItem: {
@@ -2079,6 +2343,12 @@ export interface components {
             face_candidate_quality?: number | null;
             /** Face Reliability */
             face_reliability?: number | null;
+            /** Face Query Identity Verified */
+            face_query_identity_verified?: boolean | null;
+            /** Face Candidate Identity Verified */
+            face_candidate_identity_verified?: boolean | null;
+            /** Face Candidate Source Crop Id */
+            face_candidate_source_crop_id?: string | null;
             /** Fusion Score */
             fusion_score?: number | null;
             /** Evidence Level */
@@ -2141,6 +2411,7 @@ export interface components {
              * @default 1
              */
             query_frame_count: number;
+            face_coverage?: components["schemas"]["ReidFaceCoverage"];
         };
         /** ReidStatusResponse */
         ReidStatusResponse: {
@@ -2205,6 +2476,11 @@ export interface components {
             pending_crops: number;
             /** Min Score */
             min_score: number;
+            /**
+             * Min Score Cross Camera
+             * @default 0
+             */
+            min_score_cross_camera: number;
             /**
              * Attribute Filter Enabled
              * @default false
@@ -2277,6 +2553,11 @@ export interface components {
              * @default 0
              */
             face_strong_reliability: number;
+            /**
+             * Face Rescue Min Body Score
+             * @default 0
+             */
+            face_rescue_min_body_score: number;
         };
         /**
          * SceneSummaryRequest
@@ -2667,6 +2948,13 @@ export interface components {
             last_frame_image_id: string | null;
             /** Last Error */
             last_error: string | null;
+            /** Last Frame Read At */
+            last_frame_read_at?: string | null;
+            /**
+             * Consecutive Read Failures
+             * @default 0
+             */
+            consecutive_read_failures: number;
             /** Started At */
             started_at: string | null;
             /** Stopped At */
@@ -2681,6 +2969,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Capture Health */
+            readonly capture_health: string;
         };
         /** VisualEmbeddingRequest */
         VisualEmbeddingRequest: {
@@ -3939,6 +4229,91 @@ export interface operations {
             };
         };
     };
+    list_reid_feedback_api_reid_feedback_get: {
+        parameters: {
+            query: {
+                query_crop_id: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReidFeedbackRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_reid_feedback_api_reid_feedback_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReidFeedbackUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReidFeedbackRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_reid_feedback_api_reid_feedback_export_csv_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     reid_status_api_reid_status_get: {
         parameters: {
             query?: never;
@@ -4085,6 +4460,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_attribute_job_api_attributes_jobs__crop_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                crop_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attribute_jobs_api_attributes_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

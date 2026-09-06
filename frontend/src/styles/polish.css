@@ -37,7 +37,7 @@
 }
 
 .file-field-label {
-  color: #667482;
+  color: var(--muted, #667482);
   font-size: 12px;
   font-weight: 700;
 }
@@ -49,9 +49,9 @@
   gap: 10px;
   min-height: 56px;
   padding: 10px 12px;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--line, #cbd5e1);
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--surface-soft, #f8fafc);
   cursor: pointer;
   transition:
     border-color 140ms ease,
@@ -60,8 +60,8 @@
 
 .file-drop:hover,
 .file-drop.is-dragging {
-  border-color: #2477ff;
-  background: #f0f6ff;
+  border-color: var(--accent, #2477ff);
+  background: color-mix(in srgb, var(--accent, #2477ff) 8%, var(--surface-soft, #f0f6ff));
 }
 
 .file-drop input[type="file"] {
@@ -82,8 +82,8 @@
   width: 34px;
   height: 34px;
   border-radius: 8px;
-  background: #e8f0fe;
-  color: #2477ff;
+  background: var(--accent-soft, #e8f0fe);
+  color: var(--accent, #2477ff);
 }
 
 .file-icon svg,
@@ -103,7 +103,7 @@
 
 .file-meta strong {
   overflow: hidden;
-  color: #1f2933;
+  color: var(--ink, #1f2933);
   font-size: 13px;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -111,7 +111,7 @@
 }
 
 .file-meta small {
-  color: #8493a3;
+  color: var(--muted, #8493a3);
   font-size: 11px;
 }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -26,7 +27,9 @@ from app.services.vector_index import VectorIndexError, VectorIndexingService
 logger = logging.getLogger(__name__)
 
 VL_TARGETS = ("image", "person_crop")
-ALL_TARGETS = (*VL_TARGETS, REID_OBJECT_TYPE)
+ATTRIBUTE_TARGET = "person_attributes"
+INDEX_TARGETS = (*VL_TARGETS, REID_OBJECT_TYPE)
+ALL_TARGETS = (*INDEX_TARGETS, ATTRIBUTE_TARGET)
 ACTIVE_STATUSES = ("pending", "running")
 
 
@@ -129,7 +132,8 @@ class _LeaseHeartbeat:
 class VectorIndexQueue:
     """Persistent, leased outbox for VL and ReID indexing work."""
 
-    def __init__(self) -> None:
+    def __init__(self, targets: tuple[str, ...] = INDEX_TARGETS) -> None:
+        self._targets = targets
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
@@ -141,7 +145,7 @@ class VectorIndexQueue:
         """Start one in-process consumer when at least one complete target is configured."""
 
         settings = settings or get_settings()
-        if not any(self.target_enabled(target, settings) for target in ALL_TARGETS):
+        if not any(self.target_enabled(target, settings) for target in self._targets):
             return
         with self._lifecycle_lock:
             if self._thread is not None and self._thread.is_alive():
@@ -195,6 +199,8 @@ class VectorIndexQueue:
 
         if target not in ALL_TARGETS:
             return False
+        if target == ATTRIBUTE_TARGET:
+            return settings.vlm_structured_background and settings.vlm_provider != "none"
         if target == REID_OBJECT_TYPE:
             return bool(
                 settings.reid_enabled
@@ -204,8 +210,7 @@ class VectorIndexQueue:
                 and settings.milvus_metric_type.strip().upper() == "COSINE"
             )
         has_vl_provider = (
-            settings.embedding_provider != "none"
-            or settings.visual_embedding_provider != "none"
+            settings.embedding_provider != "none" or settings.visual_embedding_provider != "none"
         )
         return bool(
             settings.vector_index_on_ingest
@@ -232,9 +237,7 @@ class VectorIndexQueue:
             if target not in ALL_TARGETS:
                 raise ValueError(f"Unsupported vector index target: {target}")
         enabled_requests = [
-            request
-            for request in unique_requests
-            if self.target_enabled(request[0], settings)
+            request for request in unique_requests if self.target_enabled(request[0], settings)
         ]
         if not enabled_requests:
             return False
@@ -388,9 +391,13 @@ class VectorIndexQueue:
             db.commit()
 
     def _run(self) -> None:
+        next_reconcile = 0.0
         while not self._stop_event.is_set():
             try:
                 settings = self._settings or get_settings()
+                if self._targets == (ATTRIBUTE_TARGET,) and time.monotonic() >= next_reconcile:
+                    self._reconcile_attributes(settings)
+                    next_reconcile = time.monotonic() + 60
                 jobs = self._claim_jobs(settings)
                 if not jobs:
                     self._wake_event.wait(settings.vector_index_background_idle_seconds)
@@ -398,11 +405,84 @@ class VectorIndexQueue:
                     continue
                 if jobs[0].target == REID_OBJECT_TYPE:
                     self._run_reid_jobs(jobs, settings)
+                elif jobs[0].target == ATTRIBUTE_TARGET:
+                    self._run_attribute_jobs(jobs, settings)
                 else:
                     self._run_vl_jobs(jobs, settings)
             except Exception:
                 logger.exception("vector_index_queue worker loop error")
                 self._stop_event.wait(1.0)
+
+    def _reconcile_attributes(self, settings: Settings) -> None:
+        """Pick up missing legacy/failed-ingest work without resetting terminal job failures."""
+        if not self.target_enabled(ATTRIBUTE_TARGET, settings):
+            return
+        with SessionLocal() as db:
+            existing = select(VectorIndexJob.object_id).where(
+                VectorIndexJob.target == ATTRIBUTE_TARGET,
+            )
+            ids = list(
+                db.scalars(
+                    select(PersonCrop.id)
+                    .where(
+                        func.coalesce(PersonCrop.attributes["source"].as_string(), "") != "vlm",
+                        PersonCrop.id.not_in(existing),
+                    )
+                    .order_by(PersonCrop.created_at)
+                    .limit(100)
+                )
+            )
+            if ids:
+                try:
+                    self.enqueue_many_in_session(
+                        db,
+                        [(ATTRIBUTE_TARGET, crop_id) for crop_id in ids],
+                        settings,
+                    )
+                except VectorQueueFullError:
+                    # Still let the consumer claim/drain existing work this iteration.
+                    return
+                db.commit()
+
+    def _run_attribute_jobs(self, jobs: list[ClaimedVectorIndexJob], settings: Settings) -> None:
+        from app.services.observation_index import ObservationIndexService
+        from app.services.structured_attributes import StructuredAttributeService
+
+        for job in jobs:
+            try:
+                with _LeaseHeartbeat(self, (job,), settings) as lease:
+                    with SessionLocal() as db:
+                        crop = db.get(PersonCrop, job.object_id)
+                        if crop is not None:
+                            db.expunge(crop)
+                    # No database transaction remains open while the remote VLM is running.
+                    attributes = None
+                    if crop is not None and (crop.attributes or {}).get("source") != "vlm":
+                        with SessionLocal() as db:
+                            analyzer = StructuredAttributeService(db, settings)
+                            attributes = analyzer.analyze_person_crop(
+                                crop,
+                                persist=False,
+                            )
+                    lease.fence()
+                    with SessionLocal() as db:
+                        self._lock_owned_jobs_in_session(db, (job,), settings)
+                        current = db.get(PersonCrop, job.object_id)
+                        if current is not None and attributes is not None:
+                            if (current.attributes or {}).get("source") != "vlm":
+                                merge = StructuredAttributeService._merge_existing_geometry
+                                current.attributes = merge(
+                                    current.attributes,
+                                    attributes,
+                                )
+                                ObservationIndexService(db, settings).upsert_crop(current)
+                        self._delete_owned_job_in_session(db, job)
+                        db.commit()
+            except LeaseLostError:
+                logger.warning("Attribute job lost lease: %s", job.id)
+            except Exception as exc:
+                logger.exception("Attribute analysis failed for job %s", job.id)
+                self._mark_failed(job, str(exc), settings)
 
     def _run_vl_jobs(self, jobs: list[ClaimedVectorIndexJob], settings: Settings) -> None:
         for job in jobs:
@@ -531,7 +611,7 @@ class VectorIndexQueue:
     def _claim_jobs(self, settings: Settings) -> list[ClaimedVectorIndexJob]:
         now = local_now(settings)
         enabled_targets = [
-            target for target in ALL_TARGETS if self.target_enabled(target, settings)
+            target for target in self._targets if self.target_enabled(target, settings)
         ]
         if not enabled_targets:
             return []
@@ -664,8 +744,7 @@ class VectorIndexQueue:
                 VectorIndexJob.lease_owner == owner,
             )
             .values(
-                lease_expires_at=now
-                + timedelta(seconds=settings.vector_index_lease_seconds),
+                lease_expires_at=now + timedelta(seconds=settings.vector_index_lease_seconds),
                 updated_at=now,
             )
             .execution_options(synchronize_session=False)
@@ -685,11 +764,7 @@ class VectorIndexQueue:
         # key; under READ COMMITTED a stale worker could then overwrite a fresh
         # claimant that acquired the job between SELECT and flush.
         attempts = job.attempts + 1
-        status = (
-            "failed"
-            if attempts > settings.vector_index_background_max_retries
-            else "pending"
-        )
+        status = "failed" if attempts > settings.vector_index_background_max_retries else "pending"
         next_run_at = None
         if status == "pending":
             base = settings.vector_index_background_retry_delay_seconds
@@ -787,3 +862,4 @@ class VectorIndexQueue:
 
 
 vector_index_queue = VectorIndexQueue()
+attribute_queue = VectorIndexQueue(targets=(ATTRIBUTE_TARGET,))

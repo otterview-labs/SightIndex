@@ -58,7 +58,7 @@ target-version = "py311"
 exclude = [".venv", ".venv312", "deploy/agx/reid_service/sapiensid"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "PERF"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/cleanup_media_before.py" = ["E402"]

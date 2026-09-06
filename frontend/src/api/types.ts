@@ -48,6 +48,7 @@ export type ReidMatchItem = Schemas["ReidMatchItem"] & {
   decision_reason?: string | null;
 };
 export type ReidSearchResponse = Schemas["ReidSearchResponse"];
+export type ReidFaceCoverage = Schemas["ReidFaceCoverage"];
 export type ReidCameraLink = Schemas["ReidCameraLink"] & {
   attribute_evidence_weight?: number | null;
   attribute_conflict_weight?: number | null;
@@ -59,6 +60,8 @@ export type ReidCameraLink = Schemas["ReidCameraLink"] & {
 export type ReidLinkResponse = Schemas["ReidLinkResponse"];
 export type ReidStatusResponse = Schemas["ReidStatusResponse"];
 export type ReidRebuildResponse = Schemas["ReidRebuildResponse"];
+export type ReidFeedbackRead = Schemas["ReidFeedbackRead"];
+export type ReidFeedbackUpsert = Schemas["ReidFeedbackUpsert"];
 
 export type AttributeMap = Record<string, unknown>;
 

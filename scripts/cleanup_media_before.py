@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# ruff: noqa: E402 -- CLI bootstrap adds the repository root before importing app modules.
 import argparse
 import sys
 from collections.abc import Iterable

@@ -1,4 +1,5 @@
 """Per-camera best candidate: ranking, not a verdict."""
+
 import uuid
 from datetime import datetime
 
@@ -30,9 +31,7 @@ def wired(monkeypatch, tmp_path):
     scores: dict[str, float] = {}
 
     monkeypatch.setattr(MilvusVectorIndex, "is_enabled", lambda self: True)
-    monkeypatch.setattr(
-        ReidEmbeddingService, "embed_image", lambda self, path: [0.1] * self.dim
-    )
+    monkeypatch.setattr(ReidEmbeddingService, "embed_image", lambda self, path: [0.1] * self.dim)
     monkeypatch.setattr(
         MilvusVectorIndex,
         "search_vector",
@@ -147,3 +146,21 @@ def test_an_unknown_crop_is_a_404(wired):
     client, _, _ = wired
 
     assert client.post(f"/api/reid/crops/{uuid.uuid4()}/links").status_code == 404
+
+
+def test_camera_link_rejects_strong_face_conflict_and_uses_next_candidate(wired, monkeypatch):
+    client, ids, _ = wired
+
+    def conflicting_face(db, settings, crop, items, **kwargs):
+        for item in items:
+            if item.crop_id == ids["b_best"]:
+                item.face_similarity = 0.1
+                item.face_match = False
+                item.face_reliability = 0.95
+
+    monkeypatch.setattr("app.api.reid.enrich_face_evidence", conflicting_face)
+    response = client.post(f"/api/reid/crops/{ids['query']}/links")
+    assert response.status_code == 200
+    links = response.json()["links"]
+    assert str(ids["b_best"]) not in {link["crop_id"] for link in links}
+    assert str(ids["b_weak"]) in {link["crop_id"] for link in links}

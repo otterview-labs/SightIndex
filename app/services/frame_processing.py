@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, request
 
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
@@ -381,9 +382,7 @@ class FrameProcessingService:
         original_thumbnail_url = image.thumbnail_url
         annotated_url: str | None = None
 
-        raw_detections = (
-            detections if detections is not None else self.detector.detect(image_path)
-        )
+        raw_detections = detections if detections is not None else self.detector.detect(image_path)
         image_detections = self.quality_filter_detections(raw_detections)
         if image_detections:
             annotated_url = self._create_annotated_frame_file(image_path, image_detections)
@@ -432,16 +431,21 @@ class FrameProcessingService:
             image.thumbnail_url = original_thumbnail_url
             raise
         if enqueued:
-            from app.services.vector_index_queue import vector_index_queue
+            from app.services.vector_index_queue import attribute_queue, vector_index_queue
 
             vector_index_queue.wake(self.settings)
+            attribute_queue.wake(self.settings)
         for crop in crops:
             self.db.refresh(crop)
         if crops:
             self._try_recognize_faces(image, crops)
         if self.settings.appearance_tone_on_ingest and crops:
             self._try_read_clothing_tone(crops)
-        if self.settings.vlm_structured_on_ingest and crops:
+        if (
+            self.settings.vlm_structured_on_ingest
+            and not self.settings.vlm_structured_background
+            and crops
+        ):
             self._try_analyze_crop_attributes(crops)
         if self.settings.vector_index_on_ingest and crops:
             self._try_index_crops(crops)
@@ -597,8 +601,7 @@ class FrameProcessingService:
                 edge_mask = cv2.GaussianBlur(edge_mask, (0, 0), 0.8)
                 mask = cv2.cvtColor(edge_mask, cv2.COLOR_GRAY2BGR).astype("float32") / 255.0
                 crop = cv2.convertScaleAbs(
-                    crop.astype("float32") * (1.0 - mask)
-                    + sharpened.astype("float32") * mask
+                    crop.astype("float32") * (1.0 - mask) + sharpened.astype("float32") * mask
                 )
             else:
                 crop = sharpened
@@ -662,7 +665,9 @@ class FrameProcessingService:
         """
 
         from app.services.vector_index_queue import (
+            ATTRIBUTE_TARGET,
             REID_OBJECT_TYPE,
+            VectorQueueFullError,
             vector_index_queue,
         )
 
@@ -677,16 +682,19 @@ class FrameProcessingService:
         requests: list[tuple[str, uuid.UUID]] = []
         if vector_index_queue.target_enabled("image", self.settings):
             requests.append(("image", image.id))
-        requests.extend(
-            (target, crop.id) for crop in crops for target in crop_targets
-        )
-        if not requests:
-            return False
-        return vector_index_queue.enqueue_many_in_session(
-            self.db,
-            requests,
-            self.settings,
-        )
+        requests.extend((target, crop.id) for crop in crops for target in crop_targets)
+        enqueued = vector_index_queue.enqueue_many_in_session(self.db, requests, self.settings)
+        try:
+            attributes_enqueued = vector_index_queue.enqueue_many_in_session(
+                self.db,
+                [(ATTRIBUTE_TARGET, crop.id) for crop in crops],
+                self.settings,
+            )
+        except VectorQueueFullError:
+            # A missing VLM label is recoverable from the durable crop row. Periodic
+            # reconciliation will enqueue it later; never discard media for slow labels.
+            attributes_enqueued = False
+        return enqueued or attributes_enqueued
 
     def _try_index_crops(self, crops: list[PersonCrop]) -> None:
         if self.settings.vector_index_on_ingest_background:
@@ -737,8 +745,16 @@ class FrameProcessingService:
                 stature = stature_service.describe(crop.bbox, crop.camera_id)
                 if stature:
                     attributes["stature"] = stature
-                crop.attributes = attributes
-                self.db.add(crop)
+                self.db.execute(
+                    update(PersonCrop)
+                    .where(
+                        PersonCrop.id == crop.id,
+                        func.coalesce(PersonCrop.attributes["source"].as_string(), "") != "vlm",
+                    )
+                    .values(attributes=attributes)
+                    .execution_options(synchronize_session=False)
+                )
+                self.db.expire(crop, ["attributes"])
                 changed = True
             if changed:
                 self.db.commit()

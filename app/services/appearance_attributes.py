@@ -276,7 +276,7 @@ class AppearanceAttributeService:
         return self._window(cv2_module, image, np.mean(face, axis=0), radius)
 
     def _sleeve(self, cv2_module, image, points, seen, skin) -> str | None:
-        """Return "short" for forearm skin; otherwise abstain instead of guessing "long"."""
+        """Return "short" on forearm skin, otherwise abstain. See the module docstring."""
 
         radius = max(3, int(image.shape[1] * 0.07))
         torso = self._torso_box(points, seen)
@@ -284,9 +284,7 @@ class AppearanceAttributeService:
             if not (seen(elbow) and seen(wrist)):
                 continue
             upper_arm = (
-                float(np.linalg.norm(points[shoulder] - points[elbow]))
-                if seen(shoulder)
-                else 0.0
+                float(np.linalg.norm(points[shoulder] - points[elbow])) if seen(shoulder) else 0.0
             )
             forearm = float(np.linalg.norm(points[elbow] - points[wrist]))
             if forearm < max(2.0 * radius, 0.6 * upper_arm):

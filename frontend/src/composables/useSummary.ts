@@ -18,7 +18,7 @@ const loadingMoreImages = ref(false);
 const loadingMoreCrops = ref(false);
 
 const runningCount = computed(
-  () => streams.value.filter((stream) => stream.status === "running").length,
+  () => streams.value.filter((stream) => stream.capture_health === "healthy").length,
 );
 
 const latestError = computed(() => streams.value.find((stream) => stream.last_error));
@@ -26,7 +26,13 @@ const latestError = computed(() => streams.value.find((stream) => stream.last_er
 const latestStatus = computed(() => {
   const failing = latestError.value;
   if (failing) return `${failing.name}: ${failing.last_error}`;
-  return streams.value.length ? "视频流状态正常" : "等待注册视频流";
+  if (!streams.value.length) return "等待注册视频流";
+  const active = streams.value.filter((stream) => stream.status !== "stopped");
+  const stalled = active.find((stream) => stream.capture_health === "stalled");
+  if (stalled) return `${stalled.name}：读帧心跳超时`;
+  const unverified = active.find((stream) => stream.capture_health !== "healthy");
+  if (unverified) return `${unverified.name}：等待读帧确认`;
+  return active.length ? "采集心跳正常" : "视频流均已停止";
 });
 
 const cameraOptions = computed(() => {

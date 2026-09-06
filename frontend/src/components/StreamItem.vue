@@ -39,6 +39,11 @@ const frameText = computed(() =>
   props.stream.last_frame_image_id ? `最后帧 ${shortId(props.stream.last_frame_image_id)}` : "无帧",
 );
 const coordinate = computed(() => formatCountingLine(props.stream.counting_line));
+const healthLabels: Record<string, string> = {
+  healthy: "采集正常", stalled: "读帧心跳超时", unverified: "等待读帧确认",
+  error: "采集异常", stopped: "已停止",
+};
+const healthLabel = computed(() => healthLabels[props.stream.capture_health ?? "unverified"] || "等待读帧确认");
 
 const fallbackUrl = computed(() => props.frame?.thumbnail_url || props.frame?.image_url || "");
 const previewUrl = computed(() =>
@@ -87,7 +92,12 @@ watch(
           间隔 {{ stream.frame_interval_seconds }}s / {{ lineText }} / {{ frameText }}
         </span>
       </span>
-      <span class="status" :class="stream.status">{{ stream.status }}</span>
+      <span class="status" :class="{
+        running: stream.capture_health === 'healthy',
+        error: stream.capture_health === 'error' || stream.capture_health === 'stalled',
+      }">
+        {{ healthLabel }}
+      </span>
       <span class="stream-disclosure">{{ expanded || editing ? "收起" : "详情" }}</span>
     </button>
 
@@ -97,6 +107,7 @@ watch(
         <span>间隔 {{ stream.frame_interval_seconds }}s</span>
         <span>计数线 {{ stream.counting_line ? "已设置" : "未设置" }}</span>
         <span>最后帧 {{ shortId(stream.last_frame_image_id) }}</span>
+        <span>连续读帧失败 {{ stream.consecutive_read_failures ?? 0 }} 次</span>
         <span v-if="stream.last_error">{{ stream.last_error }}</span>
       </div>
       <div class="stream-actions">

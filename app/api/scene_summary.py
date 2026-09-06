@@ -2,11 +2,10 @@ import base64
 import binascii
 import tempfile
 from pathlib import Path
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-from app.config.settings import Settings, get_settings
+from app.api.deps import AppSettings
 from app.schemas.scene_summary import SceneSummaryRequest
 from app.services.vlm import VLMRuntimeError, VLMSceneSummaryService
 
@@ -18,7 +17,7 @@ router = APIRouter(prefix="/api/vlm", tags=["vlm"])
 )
 def summarize_scene(
     payload: SceneSummaryRequest,
-    settings: Annotated[Settings, Depends(get_settings)],
+    settings: AppSettings,
 ) -> dict[str, object]:
     try:
         image_bytes = _decode_image_base64(payload.image_base64)

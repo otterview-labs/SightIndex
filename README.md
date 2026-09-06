@@ -135,6 +135,33 @@ MILVUS_ENABLED=true .venv/bin/python scripts/check_milvus.py
 Milvus binds to loopback by default. Do not expose PostgreSQL, Milvus, model services, or raw media
 storage directly to an untrusted network.
 
+### ReID operational notes
+
+- Enable with `REID_ENABLED`, `REID_SERVICE_URL`, `MILVUS_ENABLED`. `GET /api/reid/status`
+  distinguishes configured (`enabled`) from actually usable (`ready`, service probed live) and
+  reports index coverage and backlog for the current model.
+- New crops index automatically through the persistent job queue when `REID_INDEX_ON_INGEST=true`
+  (independent of the VL `VECTOR_INDEX_ON_INGEST` switches); `POST /api/reid/index/rebuild`
+  backfills history in batches.
+- Index markers are per model+dimension: switching `REID_MODEL` re-queues old crops rather than
+  treating stale vectors as coverage. Vectors embedded before the square-pad preprocessing fix
+  should be rebuilt once.
+- ReID does not automatically assign `person_id`, and it is not a replacement for InsightFace
+  face confirmation. Crops confirmed as another person are excluded from trajectory matches
+  whatever their score.
+- Stored-crop searches expose pairwise `same person / different person` feedback. The labels are
+  persisted separately from identities, can be exported at `/api/reid/feedback/export.csv`, and
+  do not change live ranking until the exported set has been evaluated with
+  `scripts/evaluate_reid_walkthrough.py`.
+- Weights are not in git: `data/models/sapiensid_wb12m/` (1.5GB) plus `~/.cache/yolov8n-pose.pt`
+  and the HuggingFace cache for the DFA face detector; see `deploy/agx/reid_service/README.md`.
+
+Before scaling identity binding beyond candidate display, benchmark on a small labeled set from
+real `person_crops` (two or more cameras, similar-clothing hard negatives, occlusion, time gaps)
+and record Recall@1/5, mAP, false-match rate at fixed recall, latency and backlog. Phase 2 -
+tracklets, camera topology and persistent global identities - is designed in
+`docs/cross-camera-reid.md`.
+
 ## Model services
 
 All heavyweight model files are runtime assets and should be downloaded deliberately before

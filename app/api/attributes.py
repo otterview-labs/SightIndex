@@ -3,10 +3,11 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import AppSettings, DBSession
 from app.models.media import PersonCrop
+from app.models.vectors import VectorIndexJob
 from app.schemas.attributes import (
     ObjectType,
     PersonCropAttributeResponse,
@@ -20,6 +21,67 @@ from app.services.vlm import VLMRuntimeError
 
 router = APIRouter(prefix="/attributes", tags=["attributes"])
 UploadImage = Annotated[UploadFile, File(...)]
+
+
+@router.post("/jobs/{crop_id}/retry")
+def retry_attribute_job(crop_id: uuid.UUID, db: DBSession, settings: AppSettings) -> dict[str, str]:
+    from app.services.vector_index_queue import (
+        ATTRIBUTE_TARGET,
+        VectorQueueFullError,
+        attribute_queue,
+    )
+
+    if not attribute_queue.target_enabled(ATTRIBUTE_TARGET, settings):
+        raise HTTPException(status_code=409, detail="Background VLM worker is disabled")
+    crop = db.get(PersonCrop, crop_id)
+    if crop is None:
+        raise HTTPException(status_code=404, detail="Person crop not found")
+    if (crop.attributes or {}).get("source") == "vlm":
+        return {"status": "already_completed"}
+    try:
+        attribute_queue.enqueue_in_session(db, ATTRIBUTE_TARGET, crop_id, settings)
+        db.commit()
+    except VectorQueueFullError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Attribute queue is full; retry later") from exc
+    attribute_queue.wake(settings)
+    return {"status": "queued"}
+
+
+@router.get("/jobs")
+def attribute_jobs(db: DBSession) -> dict[str, object]:
+    """Live coverage plus durable failures; an old backfill checkpoint is not live coverage."""
+    pending = db.scalar(
+        select(func.count())
+        .select_from(PersonCrop)
+        .where(
+            func.coalesce(PersonCrop.attributes["source"].as_string(), "") != "vlm",
+        )
+    )
+    counts = db.execute(
+        select(VectorIndexJob.status, func.count())
+        .where(
+            VectorIndexJob.target == "person_attributes",
+        )
+        .group_by(VectorIndexJob.status)
+    )
+    failures = db.scalars(
+        select(VectorIndexJob)
+        .where(
+            VectorIndexJob.target == "person_attributes",
+            VectorIndexJob.status == "failed",
+        )
+        .order_by(VectorIndexJob.updated_at.desc())
+        .limit(50)
+    )
+    return {
+        "pending_crops": int(pending or 0),
+        "queue": dict(counts.all()),
+        "failures": [
+            {"crop_id": str(job.object_id), "attempts": job.attempts, "error": job.last_error}
+            for job in failures
+        ],
+    }
 
 
 @router.post("/analyze", response_model=StructuredAnalyzeResponse)

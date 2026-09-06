@@ -2302,7 +2302,8 @@ def test_insightface_small_crop_extraction_upscales_before_embedding(monkeypatch
     assert captured["paths"][0] == image_path
     assert captured["paths"][1].name.startswith("sightindex-face-upscale-")
     assert not captured["paths"][1].exists()
-    assert candidates[0].model == "fake-insightface-upscaled-3.00x"
+    assert candidates[0].model == "fake-insightface"
+    assert candidates[0].preprocessing_scale == 3.0
     assert candidates[0].bbox["x"] == pytest.approx(20.0)
     assert candidates[0].bbox["y"] == pytest.approx(16.0)
     assert candidates[0].bbox["width"] == pytest.approx(20.0)
@@ -3570,7 +3571,7 @@ def test_stream_runtime_rolls_back_queue_full_and_processes_next_frame(
     attempts = 0
 
     monkeypatch.setattr(
-        "app.services.stream_runtime.open_video_capture",
+        "app.services.stream_runtime.CaptureProcess",
         lambda *args: capture,
     )
     monkeypatch.setattr(
@@ -3662,6 +3663,65 @@ def test_stream_runtime_rolls_back_queue_full_and_processes_next_frame(
     assert persisted_stream.status == "stopped"
     assert not (tmp_path / "stream-1.jpg").exists()
     assert (tmp_path / "stream-2.jpg").exists()
+
+
+def test_stream_runtime_releases_capture_on_read_timeout(monkeypatch, tmp_path):
+    """A stuck capture.read() must not freeze the stream forever or race capture.release()."""
+
+    monkeypatch.setenv("STREAM_WARMUP_FRAMES", "0")
+    monkeypatch.setenv("RTSP_READ_TIMEOUT_MS", "100")
+    main = load_app(monkeypatch, tmp_path, "test-stream-read-timeout")
+    from app.db.session import SessionLocal
+    from app.models.media import VideoStream
+    from app.services.stream_runtime import StreamRuntime
+
+    class FakeCapture:
+        def __init__(self):
+            self.released = False
+
+        def isOpened(self):
+            return True
+
+        def read(self):
+            raise TimeoutError("native decoder did not respond")
+
+        def release(self):
+            self.released = True
+
+    capture = FakeCapture()
+    runtime = StreamRuntime()
+    stop_event = threading.Event()
+    errors = []
+
+    monkeypatch.setattr(
+        "app.services.stream_runtime.CaptureProcess", lambda *args: capture
+    )
+    original_set_stream_error = runtime._set_stream_error
+
+    def record_and_stop(db, stream, message, status="error"):
+        errors.append((message, status))
+        original_set_stream_error(db, stream, message, status)
+        stop_event.set()
+
+    monkeypatch.setattr(runtime, "_set_stream_error", record_and_stop)
+
+    main.init_db()
+    with SessionLocal() as db:
+        stream = VideoStream(
+            name="stuck-read",
+            stream_url="rtsp://example.invalid/live",
+            frame_interval_seconds=0.2,
+            status="running",
+        )
+        db.add(stream)
+        db.commit()
+        stream_id = stream.id
+
+    runtime._run_capture_loop(stream_id, stop_event)
+
+    assert errors and errors[0][0] == "Frame read timed out"
+    # release terminates the decoder owner process, never a concurrent native read in this API.
+    assert capture.released is True
 
 
 def test_stream_snapshot_indexes_image_when_enabled(monkeypatch, tmp_path):

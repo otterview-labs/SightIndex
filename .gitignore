@@ -46,3 +46,4 @@ frontend/*.tsbuildinfo
 
 # SapiensID weights: 1.5GB, fetched at deploy time
 data/models/
+:memory:.ses
