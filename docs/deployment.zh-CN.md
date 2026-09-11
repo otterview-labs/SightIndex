@@ -322,6 +322,39 @@ sudo -u sightindex -H sh -c 'cd /opt/sightindex && .venv/bin/python scripts/chec
 
 在 API 之前启动可选依赖，以便单独检查它们的就绪状态。
 
+### 模型清单
+
+各能力依赖的模型资源如下。除标注「随仓库内置」或「操作员提供镜像」的条目外，均须预先
+放置并核对哈希，处理请求时不会自动下载：`FACE_INSIGHTFACE_ALLOW_DOWNLOAD` 默认为
+`false`，ReID 的姿态权重也要求预置后才允许服务就绪。
+
+| 能力 | 模型 / 资源 | 规模 / 维度 | 来源与许可 |
+| --- | --- | --- | --- |
+| 人员检测（API 内，`PERSON_DETECTOR=yolo`） | Ultralytics `yolo11n.pt` | 约 6 MB | Ultralytics 官方发布，AGPL-3.0 |
+| 姿态关键点（外观属性与 ReID 对齐共用） | `yolov8n-pose.pt`，预置于 `~/.cache/yolov8n-pose.pt` | 6.5 MB，17 关键点 | Ultralytics 官方发布；参与 ReID 不可变版本指纹，禁止自动下载 |
+| 人脸检测与嵌入（API 内） | InsightFace `buffalo_l` ONNX 组 | 输出 512 维 | InsightFace model zoo，注意上游非商业限制；切换时 `FACE_EMBEDDING_DIM=512` 并重建既有 face 向量 |
+| ReID 身份向量（可选服务 `18031`） | SapiensID `sapiensid_wb12m`（`model.yaml` + `model.pth`） | 1.5 GB，4096 维 | 上游 [mk-minchul/sapiensid](https://github.com/mk-minchul/sapiensid)，CC BY-NC 4.0 非商业；Git 不包含，自行获取后以 `/ready` 指纹核对；28 MB DFA 人脸对齐权重已随仓库内置 |
+| 通用视觉嵌入（可选服务 `18021`，容器路径 `18032`） | `Qwen/Qwen3-VL-Embedding-2B` | 2B 参数，2048 维 | ModelScope，用 `deploy/containers/download_embedding_model.py` 下载并校验 sha256；备选 CLIP `sentence-transformers/clip-ViT-B-32`（512 维，通用图文向量，生产业务检索路径不使用）或 DashScope 多模态 API |
+| 文本语义嵌入（语义搜索，可选） | Ollama `qwen3-embedding:4b` | 4B 参数，2560 维 | Ollama 模型库；`EMBEDDING_DIM=2560` 必须与模型一致 |
+| VLM 描述 / 结构化属性（可选） | 任意 OpenAI 兼容端点，默认 `http://127.0.0.1:8001/v1` | 取决于所选模型 | 操作员自备（例如 vLLM 部署 Qwen-VL 系列），`VLM_MODEL` 指定模型名 |
+| Qwen 重排辅助（可选 `18022`） | 操作员提供的 NVIDIA 镜像 + `VLM_RERANK_MODEL` | — | 仓库不构建该镜像 |
+| 外部 YOLO 服务（可选 `19121`） | 操作员提供的镜像 + `YOLO_SERVICE_MODEL_PATH` | — | 仓库不构建该镜像 |
+
+容器部署的只读模型目录（`MODEL_DIR`）布局：
+
+```text
+models/
+  yolo11n.pt
+  yolov8n-pose.pt
+  sapiensid_wb12m/model.yaml
+  sapiensid_wb12m/model.pth
+  insightface/models/buffalo_l/*.onnx
+  qwen3-vl-embedding-2b-c73fa9ca/
+```
+
+模型与第三方使用限制另见 `THIRD_PARTY_NOTICES.md` 与
+[`deploy/agx/reid_service/README.md`](../deploy/agx/reid_service/README.md)。
+
 ### SapiensID ReID
 
 Git 中不包含大型 SapiensID checkpoint。请遵循

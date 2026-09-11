@@ -337,6 +337,40 @@ visual collection prefix when the model or vector dimension changes.
 
 Start optional dependencies before the API so readiness can be checked independently.
 
+### Model inventory
+
+The model assets each capability depends on are listed below. Except for entries marked as vendored
+in the repository or operator-supplied images, every asset must be placed and hash-checked in
+advance: requests never trigger automatic downloads. `FACE_INSIGHTFACE_ALLOW_DOWNLOAD` defaults to
+`false`, and the ReID pose weights must also be pre-seeded before the service reports ready.
+
+| Capability | Model / asset | Size / dims | Source and license |
+| --- | --- | --- | --- |
+| Person detection (in-API, `PERSON_DETECTOR=yolo`) | Ultralytics `yolo11n.pt` | ~6 MB | Official Ultralytics release, AGPL-3.0 |
+| Pose keypoints (shared by appearance attributes and ReID alignment) | `yolov8n-pose.pt`, pre-seeded at `~/.cache/yolov8n-pose.pt` | 6.5 MB, 17 keypoints | Official Ultralytics release; participates in the immutable ReID pipeline revision, no automatic download |
+| Face detection and embedding (in-API) | InsightFace `buffalo_l` ONNX set | 512-d output | InsightFace model zoo; note the upstream non-commercial restriction. When switching, set `FACE_EMBEDDING_DIM=512` and rebuild existing face vectors |
+| ReID identity vector (optional service `18031`) | SapiensID `sapiensid_wb12m` (`model.yaml` + `model.pth`) | 1.5 GB, 4096-d | Upstream [mk-minchul/sapiensid](https://github.com/mk-minchul/sapiensid), CC BY-NC 4.0 non-commercial; not in Git — obtain it, then verify against the `/ready` fingerprint. The 28 MB DFA face-aligner weight is vendored in the repository |
+| Generic visual embedding (optional service `18021`, container path `18032`) | `Qwen/Qwen3-VL-Embedding-2B` | 2B params, 2048-d | ModelScope; download and sha256-verify via `deploy/containers/download_embedding_model.py`. Alternatives: CLIP `sentence-transformers/clip-ViT-B-32` (512-d; generic image-text vectors, not used by the production business-search path) or the DashScope multimodal API |
+| Text semantic embedding (semantic search, optional) | Ollama `qwen3-embedding:4b` | 4B params, 2560-d | Ollama model library; `EMBEDDING_DIM=2560` must match the model |
+| VLM captioning / structured attributes (optional) | Any OpenAI-compatible endpoint, default `http://127.0.0.1:8001/v1` | depends on the chosen model | Operator-supplied (for example a vLLM-hosted Qwen-VL); `VLM_MODEL` names it |
+| Qwen reranker helper (optional `18022`) | Operator-supplied NVIDIA image + `VLM_RERANK_MODEL` | — | The repository does not build this image |
+| External YOLO service (optional `19121`) | Operator-supplied image + `YOLO_SERVICE_MODEL_PATH` | — | The repository does not build this image |
+
+Read-only model directory layout for the container deployment (`MODEL_DIR`):
+
+```text
+models/
+  yolo11n.pt
+  yolov8n-pose.pt
+  sapiensid_wb12m/model.yaml
+  sapiensid_wb12m/model.pth
+  insightface/models/buffalo_l/*.onnx
+  qwen3-vl-embedding-2b-c73fa9ca/
+```
+
+Model and third-party usage restrictions are also covered in `THIRD_PARTY_NOTICES.md` and
+[`deploy/agx/reid_service/README.md`](../deploy/agx/reid_service/README.md).
+
 ### SapiensID ReID
 
 The large SapiensID checkpoint is not included in Git. Follow
