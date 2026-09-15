@@ -126,6 +126,7 @@ class Settings(BaseSettings):
     rtsp_open_timeout_ms: int = Field(default=8000, ge=100, le=60000)
     rtsp_read_timeout_ms: int = Field(default=8000, ge=100, le=60000)
     stream_warmup_frames: int = Field(default=3, ge=0, le=60)
+    stream_sharpest_frame_burst_size: int = Field(default=1, ge=1, le=8)
     stream_corrupt_frame_mean_diff_threshold: float = Field(default=45.0, ge=0.0, le=255.0)
     stream_diagnostics_enabled: bool = False
     stream_diagnostics_interval_seconds: float = Field(default=10.0, ge=0.5, le=3600.0)

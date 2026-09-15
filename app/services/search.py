@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Select, String, and_, cast, or_, select
+from sqlalchemy import Select, String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings, get_settings
@@ -604,6 +604,7 @@ class StructuredSearchService:
             filters or SearchFilters(), self.settings, self.db.get_bind().dialect.name
         )
         stmt = select(PersonCrop).order_by(PersonCrop.created_at.desc(), PersonCrop.id.desc())
+        stmt = self.prefilter_candidates(stmt, PersonCrop, conditions)
         if person_ids is not None:
             stmt = stmt.where(PersonCrop.person_id.in_(person_ids))
         if filters.person_id:
@@ -881,12 +882,8 @@ class StructuredSearchService:
             return all(self._normalize_value(value) is False for value in values)
         return any(self._normalize_value(value) in expected for value in values)
 
-    def _attribute_values(
-        self,
-        attributes: dict[str, Any],
-        bbox: dict[str, Any],
-        field: str,
-    ) -> list[object]:
+    @staticmethod
+    def _attribute_paths(field: str) -> tuple[tuple[str, ...], ...]:
         paths = {
             "hair": (("appearance", "hair"), ("hair",)),
             "hat": (("appearance", "hat"), ("hat",)),
@@ -916,8 +913,44 @@ class StructuredSearchService:
                 ("fighting",),
             ),
         }
+        return paths.get(field, ((field,),))
+
+    def prefilter_candidates(self, statement, model, conditions: list[StructuredCondition]):
+        """Conservatively narrow SQLite candidates; Python remains the final authority."""
+        if self.db.get_bind().dialect.name != "sqlite":
+            return statement
+        detector_labels = {
+            "holding_phone": ("phone",),
+            "smoking": ("smoking",),
+            "falling": ("falling", "fallen"),
+            "fighting": ("fighting",),
+        }
+        for condition in conditions:
+            if len(condition.values) != 1 or not isinstance(condition.values[0], bool):
+                continue
+            expected = condition.values[0]
+            aliases = ("true", "yes", "是") if expected else ("false", "no", "否")
+            predicates = []
+            for path in self._attribute_paths(condition.field):
+                value = func.json_extract(model.attributes, "$." + ".".join(path))
+                predicates.append(value == int(expected))
+                predicates.extend(cast(value, String).ilike(f"%{alias}%") for alias in aliases)
+            if expected and condition.field in detector_labels:
+                label = cast(func.json_extract(model.bbox, "$.label"), String)
+                predicates.extend(
+                    label.ilike(f"%{alias}%") for alias in detector_labels[condition.field]
+                )
+            statement = statement.where(or_(*predicates))
+        return statement
+
+    def _attribute_values(
+        self,
+        attributes: dict[str, Any],
+        bbox: dict[str, Any],
+        field: str,
+    ) -> list[object]:
         values: list[object] = []
-        for path in paths.get(field, ((field,),)):
+        for path in self._attribute_paths(field):
             value = self._nested_value(attributes, path)
             normalized = self._normalize_value(value)
             if normalized is not None and normalized != "unknown":

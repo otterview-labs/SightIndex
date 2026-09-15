@@ -218,6 +218,7 @@ class ObservationIndexService:
             only_labeled=only_labeled,
         )
         if conditions:
+            stmt = structured.prefilter_candidates(stmt, PersonObservationIndex, conditions)
             rows = []
             total = 0
             ordered = stmt.order_by(

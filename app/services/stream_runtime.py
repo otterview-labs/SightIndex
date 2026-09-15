@@ -151,6 +151,8 @@ class StreamRuntime:
                     except (OSError, EOFError):
                         ok, frame = False, None
                         read_timed_out = True
+                    if ok:
+                        frame = self._sharpest_of_burst(capture, frame, cv2, settings, stop_event)
                     if not ok:
                         stream.consecutive_read_failures += 1
                         reason = (
@@ -661,6 +663,42 @@ class StreamRuntime:
     def _frame_reference(self, frame: object, cv2: object) -> object:
         resized = cv2.resize(frame, (160, 90))
         return cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+    def _sharpest_of_burst(
+        self,
+        capture: object,
+        frame: object,
+        cv2: object,
+        settings: Settings,
+        stop_event: threading.Event,
+    ) -> object:
+        """Preserve the deployed optional sharpest-frame selection without losing a good read."""
+        burst_size = settings.stream_sharpest_frame_burst_size
+        if burst_size <= 1:
+            return frame
+        best_frame = frame
+        best_score = self._sharpness_score(frame, cv2)
+        for _ in range(burst_size - 1):
+            if stop_event.is_set():
+                break
+            try:
+                next_ok, next_frame = capture.read()
+            except (InterruptedError, OSError, EOFError):
+                break
+            if not next_ok:
+                break
+            score = self._sharpness_score(next_frame, cv2)
+            if score > best_score:
+                best_score = score
+                best_frame = next_frame
+        return best_frame
+
+    def _sharpness_score(self, frame: object, cv2: object) -> float:
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            return 0.0
 
 
 stream_runtime = StreamRuntime()

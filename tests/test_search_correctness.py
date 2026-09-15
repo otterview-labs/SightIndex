@@ -132,6 +132,28 @@ def test_negative_search_excludes_conflicting_detector_evidence(client):
         assert response.json()["items"] == []
 
 
+@pytest.mark.parametrize(
+    ("attributes", "label", "query"),
+    [
+        ({"backpack": "\u3000YES\u3000"}, "person", "背包"),
+        ({"has_backpack": " 是 "}, "person", "背包"),
+        ({"backpack": " FALSE "}, "person", "没有背包"),
+        ({"has_backpack": "\u3000否\u3000"}, "person", "没有背包"),
+        ({}, "phone", "拿手机"),
+        ({"behavior": {"fallen": True}}, "person", "跌倒"),
+        ({"objects": {"cigarette": "true"}}, "person", "抽烟"),
+    ],
+)
+def test_sql_prefilter_keeps_legacy_aliases_and_detector_evidence(client, attributes, label, query):
+    matching = seed(attributes, label=label)
+    response = client.post("/api/search/person-crops", json={"query": query})
+    assert response.status_code == 200, response.text
+    assert [item["crop_id"] for item in response.json()["items"]] == [matching]
+    response = client.get("/api/search/observations", params={"query": query})
+    assert response.status_code == 200, response.text
+    assert [item["crop_id"] for item in response.json()["items"]] == [matching]
+
+
 def test_observation_keyword_uses_values_and_paginates_matches(client):
     matching = [seed({"objects": {"backpack": True}}, minutes=index) for index in range(3)]
     seed({"objects": {"backpack": False}}, minutes=4)
