@@ -1,0 +1,12 @@
+ARG SIGHTINDEX_BASE_IMAGE
+FROM ${SIGHTINDEX_BASE_IMAGE}
+USER root
+COPY deploy/containers/patch_semantic_settings.py /tmp/patch_semantic_settings.py
+RUN python /tmp/patch_semantic_settings.py && rm /tmp/patch_semantic_settings.py
+COPY app/api/search.py app/api/search.py
+COPY app/services/vector_index.py app/services/vector_index.py
+COPY app/services/semantic_search.py app/services/semantic_search.py
+COPY app/schemas/semantic_search.py app/schemas/semantic_search.py
+COPY frontend-dist/ frontend/dist/
+RUN python -c "from app.config.settings import Settings; from app.api.search import router; assert not Settings().semantic_search_enabled; assert any(route.path == '/search/semantic/person-crops' for route in router.routes)"
+USER sightindex

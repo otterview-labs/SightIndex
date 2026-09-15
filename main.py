@@ -8,15 +8,17 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.api.media_files import MediaStaticFiles
 from app.api.router import api_router, openai_compatible_router
 from app.api.scene_summary import router as scene_summary_router
+from app.api.upload_limits import UploadSizeLimitMiddleware
 from app.config.settings import Settings, get_settings
 from app.db.session import SessionLocal, init_db
 from app.models.media import VideoStream
-from app.services.storage import StorageService
+from app.services.storage import InvalidUploadError, StorageService
 from app.services.stream_runtime import stream_runtime
 from app.services.vector_index_queue import attribute_queue, vector_index_queue
 
@@ -55,6 +57,12 @@ def create_app() -> FastAPI:
     settings = get_settings()
     StorageService(settings).ensure_dirs()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    app.add_middleware(UploadSizeLimitMiddleware, settings=settings)
+
+    @app.exception_handler(InvalidUploadError)
+    async def invalid_upload(_: Request, exc: InvalidUploadError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status_code)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -67,7 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(openai_compatible_router)
     app.include_router(scene_summary_router)
-    app.mount("/data", StaticFiles(directory=settings.data_dir), name="data")
+    app.mount("/data", MediaStaticFiles(directory=settings.data_dir), name="data")
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -120,7 +128,9 @@ def _mount_frontend(app: FastAPI) -> None:
 
 def _basic_auth_middleware(settings: Settings):
     async def middleware(request: Request, call_next):
-        if request.url.path in AUTH_EXEMPT_PATHS:
+        if request.url.path in AUTH_EXEMPT_PATHS and (
+            request.url.path == "/health" or settings.visual_embedding_service_api_key
+        ):
             return await call_next(request)
         if _is_basic_auth_valid(request.headers.get("authorization"), settings):
             return await call_next(request)
@@ -148,9 +158,11 @@ def _is_basic_auth_valid(authorization: str | None, settings: Settings) -> bool:
         return False
     expected_username = settings.app_basic_auth_username or ""
     expected_password = settings.app_basic_auth_password or ""
-    return secrets.compare_digest(username, expected_username) and secrets.compare_digest(
-        password,
-        expected_password,
+    return secrets.compare_digest(
+        username.encode("utf-8"), expected_username.encode("utf-8")
+    ) and secrets.compare_digest(
+        password.encode("utf-8"),
+        expected_password.encode("utf-8"),
     )
 
 

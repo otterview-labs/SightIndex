@@ -113,6 +113,22 @@ class MilvusVectorIndex:
         query_vector = self.visual_embedding.embed_image(image_path)
         return self._search_vector(object_type, query_vector, top_k)
 
+    def search_text_for_objects(
+        self,
+        object_type: str,
+        query: str,
+        top_k: int,
+        object_ids: list[uuid.UUID],
+    ) -> list[VectorSearchHit]:
+        if not object_ids:
+            return []
+        if not self.is_enabled():
+            raise VectorIndexError("Visual vector search is unavailable")
+        query_vector = self._embed_text_query(query)
+        return self._search_vector(
+            object_type, query_vector, top_k, object_ids=object_ids
+        )
+
     def search_vector(
         self,
         object_type: str,
@@ -183,9 +199,17 @@ class MilvusVectorIndex:
         object_type: str,
         vector: list[float],
         top_k: int,
+        *,
+        object_ids: list[uuid.UUID] | None = None,
     ) -> list[VectorSearchHit]:
+        if object_ids == []:
+            return []
         self._require_available("vector search")
         collection = self._collection(object_type)
+        filter_kwargs = {}
+        if object_ids is not None:
+            quoted_ids = ", ".join(f'"{uuid.UUID(str(value))}"' for value in object_ids)
+            filter_kwargs["expr"] = f"object_id in [{quoted_ids}]"
         try:
             results = collection.search(
                 data=[vector],
@@ -197,6 +221,7 @@ class MilvusVectorIndex:
                 limit=top_k,
                 output_fields=["object_id"],
                 timeout=self.settings.milvus_timeout_seconds,
+                **filter_kwargs,
             )
         except Exception as exc:
             self._mark_failure()

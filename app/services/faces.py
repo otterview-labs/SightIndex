@@ -13,7 +13,7 @@ from time import monotonic
 from typing import Any
 
 from fastapi import UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
@@ -310,6 +310,7 @@ class FaceRecognitionService:
             person.avatar_url = crop.crop_url
             self.db.add(person)
         crop.person_id = person.id
+        crop.person_id_source = "manual"
         self.db.add(crop)
         self.db.add(face)
         self.db.flush()
@@ -872,9 +873,8 @@ class FaceRecognitionService:
                     match=None,
                     result_type="no_face",
                 )
-                if old_person_id is not None and crop.person_id == old_person_id:
-                    crop.person_id = None
-                    self.db.add(crop)
+                if old_person_id is not None:
+                    self._assign_recognized_person(crop, None, previous_person_id=old_person_id)
                 ObservationIndexService(self.db, self.settings).upsert_crop(crop)
                 self.db.commit()
                 self.db.refresh(event)
@@ -915,15 +915,36 @@ class FaceRecognitionService:
                 result_type=result_type,
             )
         if best is not None:
-            crop.person_id = best.person.id
-            self.db.add(crop)
-        elif old_person_id is not None and crop.person_id == old_person_id:
-            crop.person_id = None
-            self.db.add(crop)
+            self._assign_recognized_person(crop, best.person.id)
+        elif old_person_id is not None:
+            self._assign_recognized_person(crop, None, previous_person_id=old_person_id)
         ObservationIndexService(self.db, self.settings).upsert_crop(crop)
         self.db.commit()
         self.db.refresh(event)
         return event
+
+    def _assign_recognized_person(
+        self,
+        crop: PersonCrop,
+        person_id: uuid.UUID | None,
+        *,
+        previous_person_id: uuid.UUID | None = None,
+    ) -> None:
+        self.db.flush()
+        statement = update(PersonCrop).where(
+            PersonCrop.id == crop.id,
+            or_(
+                PersonCrop.person_id_source == "face",
+                and_(PersonCrop.person_id_source.is_(None), PersonCrop.person_id.is_(None)),
+            ),
+        )
+        if previous_person_id is not None:
+            statement = statement.where(PersonCrop.person_id == previous_person_id)
+        self.db.execute(
+            statement.values(person_id=person_id, person_id_source="face")
+            .execution_options(synchronize_session=False)
+        )
+        self.db.refresh(crop, attribute_names=["person_id", "person_id_source"])
 
     def rebuild_crop_recognition(self, limit: int = 500, force: bool = False) -> dict[str, object]:
         if not self.has_known_faces():

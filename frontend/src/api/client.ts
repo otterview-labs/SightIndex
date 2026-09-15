@@ -22,6 +22,9 @@ import type {
   ReidSearchResponse,
   ReidStatusResponse,
   SearchResponse,
+  SemanticSearchRequest,
+  SemanticSearchResponse,
+  SemanticSearchStatus,
   StreamActionResponse,
   VideoProcessResponse,
   VideoStream,
@@ -95,6 +98,9 @@ export const videos = {
 };
 
 export const search = {
+  semanticStatus: () => api<SemanticSearchStatus>("/api/search/semantic/status"),
+  semanticPersonCrops: (payload: SemanticSearchRequest) =>
+    api<SemanticSearchResponse>("/api/search/semantic/person-crops", jsonBody(payload)),
   personCrops: (payload: RequestBody<VisualSearchRequest, "query">) =>
     api<SearchResponse>("/api/search/person-crops", jsonBody(payload)),
   observations: (params: URLSearchParams) =>

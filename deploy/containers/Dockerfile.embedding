@@ -1,0 +1,20 @@
+ARG SIGHTINDEX_BASE_IMAGE
+FROM ${SIGHTINDEX_BASE_IMAGE}
+USER root
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN python -m pip freeze > /tmp/base-constraints.txt \
+    && python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+      -c /tmp/base-constraints.txt qwen-vl-utils==0.0.14 accelerate==1.14.0 \
+    && python -m pip check \
+    && rm /tmp/base-constraints.txt
+COPY deploy/containers/embedding_app.py deploy/containers/embedding_app.py
+COPY deploy/containers/download_embedding_model.py deploy/containers/download_embedding_model.py
+COPY app/api/upload_limits.py app/api/upload_limits.py
+RUN python -c "from transformers.processing_utils import Unpack; from transformers.utils.generic import check_model_inputs; from qwen_vl_utils import process_vision_info; from deploy.containers.embedding_app import create_app" \
+    && python -m pip freeze > /opt/sightindex/embedding-requirements.txt
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    TOKENIZERS_PARALLELISM=false \
+    PYTHONUNBUFFERED=1
+USER sightindex
+CMD ["python", "-m", "uvicorn", "deploy.containers.embedding_app:create_app", "--factory", "--host", "0.0.0.0", "--port", "18032", "--workers", "1"]

@@ -1,0 +1,17 @@
+ARG BASE_IMAGE=debian:bookworm-slim
+FROM ${BASE_IMAGE}
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-venv ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && if id node >/dev/null 2>&1; then userdel --remove node; fi \
+    && python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+RUN python -m pip install --no-cache-dir --no-deps --index-url "${TORCH_INDEX_URL}" \
+      torch==2.10.0 torchvision==0.25.0
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+      torch==2.10.0 torchvision==0.25.0 numpy==1.26.4 \
+    && python -m pip check \
+    && python -c "import sys, torch; assert sys.version_info >= (3, 11); assert torch.__version__.split('+')[0] == '2.10.0'; assert torch.version.cuda == '12.8'"

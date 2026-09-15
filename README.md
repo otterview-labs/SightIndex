@@ -83,9 +83,10 @@ proxies API calls to `http://127.0.0.1:8000` by default.
 
 ## Deployment
 
-The supported repository assets use a source build managed by systemd, with PostgreSQL and
-optionally Milvus managed by Docker Compose. The application itself does not currently ship a
-Dockerfile.
+The existing deployment assets use a source build managed by systemd, with PostgreSQL and
+optionally Milvus managed by Docker Compose. An isolated container deployment is also available
+in [`deploy/containers/README.md`](deploy/containers/README.md), including a multi-stage application
+Dockerfile, private infrastructure, and an opt-in GPU ReID service.
 
 See the deployment guide in [English](docs/deployment.md) or
 [简体中文](docs/deployment.zh-CN.md) for:
@@ -149,6 +150,15 @@ storage directly to an untrusted network.
 - ReID does not automatically assign `person_id`, and it is not a replacement for InsightFace
   face confirmation. Crops confirmed as another person are excluded from trajectory matches
   whatever their score.
+- Crop identity provenance is stored in the additive `person_id_source` column. Manual labels
+  and explicit unlabels take precedence over automatic face assignments; existing nonempty
+  identities without provenance are preserved rather than guessed. Conflicting recognition
+  events remain separate evidence, not replacement identities. Run schema initialization on
+  upgrade; rolling back to an older application loses this protection.
+- Line-counting track IDs are session-local position matches, not cross-camera identities.
+  Tracks expire after two missed sampled frames or six seconds without an observation by
+  default, configurable through `LINE_CROSSING_TRACK_MAX_MISSED_FRAMES` and
+  `LINE_CROSSING_TRACK_IDLE_SECONDS`.
 - Stored-crop searches expose pairwise `same person / different person` feedback. The labels are
   persisted separately from identities, can be exported at `/api/reid/feedback/export.csv`, and
   do not change live ranking until the exported set has been evaluated with
@@ -161,6 +171,33 @@ real `person_crops` (two or more cameras, similar-clothing hard negatives, occlu
 and record Recall@1/5, mAP, false-match rate at fixed recall, latency and backlog. Phase 2 -
 tracklets, camera topology and persistent global identities - is designed in
 `docs/cross-camera-reid.md`.
+
+## Upload safety and processing retries
+
+Image uploads accept JPEG, PNG, WebP, BMP and GIF, decode the actual image, apply EXIF
+orientation, and store a metadata-free RGB PNG (the first frame for animated images).
+Extensions and declared MIME types alone do not establish image validity. The defaults are
+20 MiB per image, including its normalized output, 25 million decoded pixels, and 128 MiB per
+video. Adjust `UPLOAD_IMAGE_MAX_BYTES`, `UPLOAD_IMAGE_MAX_PIXELS` and `UPLOAD_VIDEO_MAX_BYTES`
+for the deployment. Invalid content returns 400, unsupported formats 415, and excess size 413.
+Request bodies are also bounded before multipart spooling, including chunked uploads; the
+request allowance includes 64 KiB of framing and, outside video upload, base64 expansion.
+These limits supplement authentication and gateway rate/concurrency limits, not replace them.
+
+`/data` serves only supported image/video extensions with `nosniff` and a restrictive sandbox
+CSP. Previously stored HTML, SVG and other non-media files now return 404; no legacy file is
+deleted automatically.
+
+Schema initialization adds nullable `images.processed_at`. Image processing retries, including
+concurrent requests and images with no detections, reuse the completed result instead of creating
+new crops or indexing jobs. Legacy images with existing crops also reuse them, preserving manual
+labels. A failed pre-commit attempt rolls back its completion marker and removes only its new
+files, allowing a retry. Historical duplicates are not deleted; re-detection after model changes
+requires a separate, deliberate workflow rather than another `/process` call.
+
+Name search never uses historical recognition events to override a crop's current identity or
+explicit manual unlabel. Structured attribute search scans filtered history in stable pages,
+rather than silently excluding records older than the latest 500.
 
 ## Model services
 

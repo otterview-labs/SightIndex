@@ -1,0 +1,232 @@
+name: sightindex-bj-test
+
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    <<: *service
+    image: ${POSTGRES_IMAGE:-postgres:15-bookworm}
+    environment:
+      POSTGRES_USER: sightindex
+      POSTGRES_DB: sightindex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    mem_limit: 768m
+    cpus: 1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sightindex -d sightindex"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  etcd:
+    <<: *service
+    image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.5.14}
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+      - --auto-compaction-mode=revision
+      - --auto-compaction-retention=1000
+      - --quota-backend-bytes=1073741824
+    environment:
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - etcd-data:/etcd
+    mem_limit: 512m
+    cpus: 1
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    <<: *service
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2024-05-28T17-19-04Z}
+    command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: sightindex
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/minio_data
+    mem_limit: 768m
+    cpus: 1
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  milvus:
+    <<: *service
+    image: ${MILVUS_IMAGE:-milvusdb/milvus:v2.5.0}
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: sightindex
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      OMP_NUM_THREADS: "2"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    mem_limit: 4g
+    cpus: 2
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      start_period: 90s
+      retries: 12
+
+  api:
+    <<: *service
+    image: ${SIGHTINDEX_IMAGE:?set SIGHTINDEX_IMAGE}
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    environment:
+      ENVIRONMENT: test
+      LOCAL_TIMEZONE: Asia/Shanghai
+      DATABASE_URL: postgresql+psycopg://sightindex:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/sightindex
+      DATA_DIR: /opt/sightindex/data
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:18030}
+      AUTO_CREATE_TABLES: "true"
+      UPLOAD_IMAGE_MAX_BYTES: ${UPLOAD_IMAGE_MAX_BYTES:-20971520}
+      UPLOAD_VIDEO_MAX_BYTES: ${UPLOAD_VIDEO_MAX_BYTES:-134217728}
+      UPLOAD_IMAGE_MAX_PIXELS: ${UPLOAD_IMAGE_MAX_PIXELS:-25000000}
+      APP_BASIC_AUTH_USERNAME: ${APP_BASIC_AUTH_USERNAME:-sightindex}
+      APP_BASIC_AUTH_PASSWORD: ${APP_BASIC_AUTH_PASSWORD:?set APP_BASIC_AUTH_PASSWORD}
+      STREAM_AUTOSTART_RUNNING: "false"
+      LINE_CROSSING_TRACK_IDLE_SECONDS: ${LINE_CROSSING_TRACK_IDLE_SECONDS:-6}
+      LINE_CROSSING_TRACK_MAX_MISSED_FRAMES: ${LINE_CROSSING_TRACK_MAX_MISSED_FRAMES:-2}
+      PERSON_DETECTOR: yolo
+      YOLO_MODEL: /models/yolo11n.pt
+      YOLO_DEVICE: cpu
+      YOLO_IMAGE_SIZE: "640"
+      FACE_EMBEDDING_PROVIDER: insightface
+      FACE_EMBEDDING_DEVICE: cpu
+      FACE_INSIGHTFACE_ROOT: /models/insightface
+      FACE_INSIGHTFACE_DET_SIZE: "640"
+      FACE_INSIGHTFACE_ALLOW_DOWNLOAD: "false"
+      FACE_RECOGNITION_ON_INGEST: "false"
+      FACE_FALLBACK_TO_FULL_IMAGE: "false"
+      MILVUS_ENABLED: "true"
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      MILVUS_NAMESPACE_ID: sightindex-bj-test
+      MILVUS_COLLECTION_PREFIX: sightindex_bj_test
+      REID_ENABLED: ${REID_ENABLED:-false}
+      REID_SERVICE_URL: http://reid:18031
+      REID_SERVICE_API_KEY: ${REID_SERVICE_API_KEY:?set REID_SERVICE_API_KEY}
+      REID_CHECKPOINT_REVISION: ${REID_CHECKPOINT_REVISION:?set REID_CHECKPOINT_REVISION}
+      REID_MAX_CONCURRENCY: "1"
+      REID_FACE_CANDIDATE_LIMIT: "6"
+      REID_INDEX_ON_INGEST: "true"
+      VECTOR_INDEX_BACKGROUND_BATCH_SIZE: "1"
+      REID_ATTRIBUTE_ANALYZE_UPLOAD: "false"
+      REID_ATTRIBUTE_ENRICH_QUERY_CROP: "false"
+      EMBEDDING_PROVIDER: none
+      VISUAL_EMBEDDING_PROVIDER: none
+      VECTOR_INDEX_ON_INGEST: "false"
+      VLM_PROVIDER: none
+      VLM_STRUCTURED_ON_INGEST: "false"
+      VLM_STRUCTURED_BACKGROUND: "false"
+    volumes:
+      - ${MEDIA_DIR:?set MEDIA_DIR}:/opt/sightindex/data
+      - ${MODEL_DIR:?set MODEL_DIR}:/models:ro
+      - ${CACHE_DIR:?set CACHE_DIR}/api:/home/sightindex/.cache
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-18030}:8000"
+    mem_limit: 4g
+    cpus: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - /opt/sightindex/healthcheck.py
+      interval: 20s
+      timeout: 15s
+      start_period: 90s
+      retries: 6
+
+  reid:
+    <<: *service
+    image: ${SIGHTINDEX_IMAGE:?set SIGHTINDEX_IMAGE}
+    profiles: ["reid"]
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    command:
+      - python
+      - -m
+      - uvicorn
+      - server:app
+      - --app-dir
+      - deploy/agx/reid_service
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "18031"
+      - --workers
+      - "1"
+    environment:
+      SIGHTINDEX_ROOT: /opt/sightindex
+      REID_DEVICE: cuda:0
+      REID_CHECKPOINT_DIR: /models/sapiensid_wb12m
+      REID_SERVICE_API_KEY: ${REID_SERVICE_API_KEY:?set REID_SERVICE_API_KEY}
+      REID_WARMUP_ON_START: "true"
+      REID_BATCH_LIMIT: "1"
+    volumes:
+      - ${MODEL_DIR:?set MODEL_DIR}:/models:ro
+      - ${MODEL_DIR:?set MODEL_DIR}/yolov8n-pose.pt:/home/sightindex/.cache/yolov8n-pose.pt:ro
+    shm_size: 512m
+    mem_limit: 6g
+    cpus: 2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: ["gpu"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18031/ready', timeout=10)"
+      interval: 30s
+      timeout: 15s
+      start_period: 180s
+      retries: 6
+
+volumes:
+  postgres-data:
+  etcd-data:
+  minio-data:
+  milvus-data:

@@ -5,6 +5,7 @@ import sys
 import threading
 
 from fastapi.testclient import TestClient
+from test_api_smoke import _sample_image_bytes
 
 
 def load_app(monkeypatch, tmp_path, name: str, **env: str):
@@ -42,7 +43,7 @@ def test_reid_ingest_enqueues_with_vl_indexing_off(monkeypatch, tmp_path):
     with TestClient(main.create_app()) as client:
         upload = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", b"\xff\xd8\xff\xdbfake", "image/jpeg")},
+            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
         )
         assert upload.status_code == 200
         process = client.post(f"/api/images/{upload.json()['id']}/process")

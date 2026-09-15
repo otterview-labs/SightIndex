@@ -1,0 +1,4621 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SightIndex 核心接口：上传、检索、人脸库",
+    "version": "2026-09-09-semantic-search-v1",
+    "description": "从北京已部署OpenAPI裁剪，配套api-core-functions.zh-CN.md。核对时间2026-09-09 09:52+08:00。保留原请求/成功响应合同；中文摘要、Basic鉴权和部分错误说明为文档补充，不是新增服务能力。新上传数据自动Qwen索引当前关闭；属性生成模型未启用；人员编辑/删除、人脸删除尚无接口。"
+  },
+  "servers": [
+    {
+      "url": "http://192.168.1.40:18030",
+      "description": "北京内网示例；导入后替换为调用方实际可达地址，不代表公网可达"
+    }
+  ],
+  "tags": [
+    {
+      "name": "上传",
+      "description": "图片、视频上传及原图/人物裁剪读取"
+    },
+    {
+      "name": "检索",
+      "description": "Qwen语义、严格标签、可选ReID及受控索引维护"
+    },
+    {
+      "name": "人脸库",
+      "description": "人员创建/查询、人脸录入/查询和登记人脸检索"
+    }
+  ],
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "健康检查",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "上传"
+        ],
+        "description": "不要求鉴权；不代表模型和索引全部就绪。",
+        "security": []
+      }
+    },
+    "/api/images/upload": {
+      "post": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "上传图片",
+        "operationId": "upload_image_api_images_upload_post",
+        "parameters": [
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "upload",
+              "title": "Source Type"
+            }
+          },
+          {
+            "name": "camera_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Camera Id"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "captured_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Captured At"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_image_api_images_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "模型/索引未就绪或不可用、处理队列压力等。视频可能有已提交进度；不能把此状态当作正常空匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "file 是 multipart 文件，其余元数据为 query 参数。保存原图不等于生成人物裁剪或完成索引；非幂等。"
+      }
+    },
+    "/api/images": {
+      "get": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "图片列表",
+        "operationId": "list_images_api_images_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "has_crops",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Has Crops"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImageRead"
+                  },
+                  "title": "Response List Images Api Images Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "返回裸数组；limit 1～200，支持 offset 和 has_crops。"
+      }
+    },
+    "/api/images/{image_id}": {
+      "get": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "图片详情",
+        "operationId": "get_image_api_images__image_id__get",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "image_url 等为受认证保护的相对资源路径。"
+      }
+    },
+    "/api/media/counts": {
+      "get": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "媒体计数",
+        "operationId": "get_media_counts_api_media_counts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaCounts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "image_with_crops_count 是有裁剪的图片数，不是全部上传图片数。"
+      }
+    },
+    "/api/person-crops": {
+      "get": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "人物裁剪列表",
+        "operationId": "list_person_crops_api_person_crops_get",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PersonCropRead"
+                  },
+                  "title": "Response List Person Crops Api Person Crops Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "返回裸数组，可按 image_id 查询。"
+      }
+    },
+    "/api/person-crops/{crop_id}": {
+      "get": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "人物裁剪详情",
+        "description": "人员关联可能为空，裁剪框基于原图像素坐标。",
+        "operationId": "get_person_crop_api_person_crops__crop_id__get",
+        "parameters": [
+          {
+            "name": "crop_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Crop Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonCropRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/images/{image_id}/process": {
+      "post": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "处理图片并生成人物裁剪",
+        "operationId": "process_image_api_images__image_id__process_post",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PersonCropRead"
+                  },
+                  "title": "Response Process Image Api Images  Image Id  Process Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "模型/索引未就绪或不可用、处理队列压力等。视频可能有已提交进度；不能把此状态当作正常空匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "返回裸数组。当前北京版本重复调用可能新增重复裁剪，无通用幂等保证。200 不保证可选属性和索引步骤全部完成。"
+      }
+    },
+    "/api/videos/upload": {
+      "post": {
+        "tags": [
+          "上传"
+        ],
+        "summary": "上传并处理视频",
+        "operationId": "upload_video_api_videos_upload_post",
+        "parameters": [
+          {
+            "name": "frame_interval_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 3600,
+              "minimum": 0.1,
+              "default": 1.0,
+              "title": "Frame Interval Seconds"
+            }
+          },
+          {
+            "name": "max_frames",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 120,
+              "title": "Max Frames"
+            }
+          },
+          {
+            "name": "store_empty_frames",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Store Empty Frames"
+            }
+          },
+          {
+            "name": "line_x1",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Line X1"
+            }
+          },
+          {
+            "name": "line_y1",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Line Y1"
+            }
+          },
+          {
+            "name": "line_x2",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Line X2"
+            }
+          },
+          {
+            "name": "line_y2",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Line Y2"
+            }
+          },
+          {
+            "name": "camera_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Camera Id"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "captured_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Captured At"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_video_api_videos_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoProcessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "模型/索引未就绪或不可用、处理队列压力等。视频可能有已提交进度；不能把此状态当作正常空匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "同步保存、抽帧和检测，无异步 task_id。元数据和抽帧参数为 query。max_frames 限制抽样帧数；超时或503可能已有部分帧入库。"
+      }
+    },
+    "/api/search/semantic/status": {
+      "get": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "语义检索状态与覆盖",
+        "operationId": "semantic_search_status_api_search_semantic_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticSearchStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "configured 是配置条件，indexed_crops 是 SQL 索引标记覆盖，均不是模型及向量库实时健康保证。"
+      }
+    },
+    "/api/search/semantic/person-crops": {
+      "post": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "Qwen 自然语言检索人物候选",
+        "operationId": "semantic_search_person_crops_api_search_semantic_person_crops_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "模型/索引未就绪或不可用、处理队列压力等。视频可能有已提交进度；不能把此状态当作正常空匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "主检索入口。结果仅为语义候选，不证明颜色、性别等全部条件成立，不自动关联身份。元数据过滤在召回前生效；extra 非空拒绝。故障返回503而非空匹配。"
+      }
+    },
+    "/api/search/person-crops": {
+      "post": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "严格标签或已知人员检索",
+        "operationId": "search_person_crops_api_search_person_crops_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisualSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "兼容入口，不做向量兜底。解析出的标签条件要求同时匹配，但不保证自然语言每个词都被解析。rerank 不是启用语义检索开关。"
+      }
+    },
+    "/api/search/index/rebuild": {
+      "post": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "维护：补建视觉索引",
+        "operationId": "rebuild_search_index_api_search_index_rebuild_post",
+        "parameters": [
+          {
+            "name": "target",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(image|person_crop)$",
+              "default": "person_crop",
+              "title": "Target"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexRebuildResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "由业务后端或运维受控调用；当前Basic Auth无独立管理员权限区分。按时间倒序处理最近limit条，无offset/单对象参数。必须检查errors与indexed，不只判断200。"
+      }
+    },
+    "/api/reid/status": {
+      "get": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "可选：ReID 检索状态",
+        "operationId": "reid_status_api_reid_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReidStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "以图找历史人物的独立状态，不与Qwen图文向量空间混用。"
+      }
+    },
+    "/api/reid/search": {
+      "post": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "可选：上传人物图检索历史人物",
+        "description": "file 为查询图片，不是普通上传入库。top_k=0采用服务默认值；没有相机/时间filters参数。返回ReID候选，不证明身份。",
+        "operationId": "reid_search_api_reid_search_post",
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 0,
+              "default": 0,
+              "title": "Top K"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_reid_search_api_reid_search_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReidSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "模型/索引未就绪或不可用、处理队列压力等。视频可能有已提交进度；不能把此状态当作正常空匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reid/crops/{crop_id}/similar": {
+      "post": {
+        "tags": [
+          "检索"
+        ],
+        "summary": "可选：以已有裁剪检索相似人物",
+        "operationId": "reid_similar_to_crop_api_reid_crops__crop_id__similar_post",
+        "parameters": [
+          {
+            "name": "crop_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Crop Id"
+            }
+          },
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 0,
+              "default": 0,
+              "title": "Top K"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReidSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "模型/索引未就绪或不可用、处理队列压力等。视频可能有已提交进度；不能把此状态当作正常空匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "无需请求体。保持服务器排序，不按原始score二次排序；可能使用邻近帧、补充派生缓存或属性。"
+      }
+    },
+    "/api/persons": {
+      "post": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "创建人员档案",
+        "operationId": "create_person_api_persons_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "成功为200。创建人员不代表已录人脸；无通用幂等保证，业务端校验非空姓名。"
+      },
+      "get": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "查询人员列表",
+        "operationId": "list_persons_api_persons_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PersonRead"
+                  },
+                  "title": "Response List Persons Api Persons Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "query按姓名模糊匹配，不是工号/电话通用查询；无offset或分页游标，返回裸数组。"
+      }
+    },
+    "/api/persons/{person_id}": {
+      "get": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "查询人员详情",
+        "operationId": "get_person_api_persons__person_id__get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "当前没有人员编辑/删除接口。"
+      }
+    },
+    "/api/persons/{person_id}/faces": {
+      "post": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "为人员上传人脸照片",
+        "operationId": "add_person_face_api_persons__person_id__faces_post",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_person_face_api_persons__person_id__faces_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaceEmbeddingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "保存照片及人脸特征，可能补齐头像。应上传单人清晰照片；接口选择质量最高的人脸。返回特征元数据，不返回向量。重复上传可能新增记录。"
+      },
+      "get": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "查询人员的人脸样本",
+        "operationId": "list_person_faces_api_persons__person_id__faces_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FaceEmbeddingRead"
+                  },
+                  "title": "Response List Person Faces Api Persons  Person Id  Faces Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "返回裸数组，无offset。展示照片时通过crop_id或image_id查询资源URL。"
+      }
+    },
+    "/api/persons/{person_id}/faces/from-crop/{crop_id}": {
+      "post": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "人工确认：从已有裁剪录入人脸",
+        "operationId": "add_person_face_from_crop_api_persons__person_id__faces_from_crop__crop_id__post",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "crop_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Crop Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaceEmbeddingRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "路径中的业务对象不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "身份写操作：创建人脸特征，设置裁剪人员为人工标注，创建/更新事件及观察表。当前未预先拒绝其他人员关联冲突，调用方必须核对并确认，不能自动用于语义候选。"
+      }
+    },
+    "/api/face/search": {
+      "post": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "上传照片搜索登记人脸",
+        "operationId": "search_face_api_face_search_post",
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 10,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "min_similarity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Similarity"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_search_face_api_face_search_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaceSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "会保存查询照片和图片记录，不登记到人员名下，也不创建识别事件。顶层image_id是查询图，matches内部ID是库中来源。同一个人可多条结果，min_similarity不传不等于默认识别阈值。"
+      }
+    },
+    "/api/face/recognize": {
+      "post": {
+        "tags": [
+          "人脸库"
+        ],
+        "summary": "可选：识别并记录事件",
+        "operationId": "recognize_face_api_face_recognize_post",
+        "parameters": [
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 5,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.0,
+                  "minimum": 0.0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Threshold"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_recognize_face_api_face_recognize_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaceRecognitionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Basic认证失败；当前响应可为纯文本，并带WWW-Authenticate。",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "业务参数无效或媒体无法处理；具体原因见detail。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        {
+                          "type": "array",
+                          "items": {}
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "detail"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "保存查询图并创建识别事件。known/unknown/no_face是算法结果，不是人工确认；重复调用可能新增事件。"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "MediaCounts": {
+        "properties": {
+          "image_with_crops_count": {
+            "type": "integer",
+            "title": "Image With Crops Count"
+          },
+          "person_crop_count": {
+            "type": "integer",
+            "title": "Person Crop Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_with_crops_count",
+          "person_crop_count"
+        ],
+        "title": "MediaCounts",
+        "description": "Untruncated totals for the monitor/search overview."
+      },
+      "Body_upload_image_api_images_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_image_api_images_upload_post"
+      },
+      "FaceEmbeddingRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "crop_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Id"
+          },
+          "face_bbox": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Bbox"
+          },
+          "face_model": {
+            "type": "string",
+            "title": "Face Model"
+          },
+          "quality_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Score"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "person_id",
+          "image_id",
+          "crop_id",
+          "face_bbox",
+          "face_model",
+          "quality_score",
+          "created_at"
+        ],
+        "title": "FaceEmbeddingRead"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "SemanticSearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 20
+          },
+          "filters": {
+            "$ref": "#/components/schemas/SearchFilters"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SemanticSearchRequest"
+      },
+      "SearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResultItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "SearchResponse"
+      },
+      "Body_add_person_face_api_persons__person_id__faces_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_add_person_face_api_persons__person_id__faces_post"
+      },
+      "FaceRecognitionResponse": {
+        "properties": {
+          "result_type": {
+            "type": "string",
+            "title": "Result Type"
+          },
+          "person": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PersonRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Similarity"
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "crop_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Id"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "face_bbox": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Bbox"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/FaceMatchItem"
+            },
+            "type": "array",
+            "title": "Matches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result_type",
+          "threshold",
+          "matches"
+        ],
+        "title": "FaceRecognitionResponse"
+      },
+      "Body_upload_video_api_videos_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_video_api_videos_upload_post"
+      },
+      "SearchFilters": {
+        "properties": {
+          "start_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Time"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra"
+          }
+        },
+        "type": "object",
+        "title": "SearchFilters"
+      },
+      "PersonCropRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "image_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Image Id"
+          },
+          "crop_url": {
+            "type": "string",
+            "title": "Crop Url"
+          },
+          "bbox": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Bbox"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "image_id",
+          "crop_url",
+          "bbox",
+          "person_id",
+          "camera_id",
+          "location_id",
+          "captured_at",
+          "created_at"
+        ],
+        "title": "PersonCropRead"
+      },
+      "SemanticSearchResponse": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "semantic",
+            "title": "Mode",
+            "default": "semantic"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticSearchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "min_score": {
+            "type": "number",
+            "title": "Min Score"
+          },
+          "notice": {
+            "type": "string",
+            "title": "Notice"
+          },
+          "scope_crops": {
+            "type": "integer",
+            "title": "Scope Crops"
+          },
+          "indexed_scope_crops": {
+            "type": "integer",
+            "title": "Indexed Scope Crops"
+          },
+          "candidates_examined": {
+            "type": "integer",
+            "title": "Candidates Examined",
+            "default": 0
+          },
+          "shortlist_limited": {
+            "type": "boolean",
+            "title": "Shortlist Limited",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "model",
+          "min_score",
+          "notice",
+          "scope_crops",
+          "indexed_scope_crops"
+        ],
+        "title": "SemanticSearchResponse"
+      },
+      "Body_search_face_api_face_search_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_search_face_api_face_search_post"
+      },
+      "ReidStatusResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready",
+            "default": false
+          },
+          "reid_service_ok": {
+            "type": "boolean",
+            "title": "Reid Service Ok",
+            "default": false
+          },
+          "milvus_configured": {
+            "type": "boolean",
+            "title": "Milvus Configured",
+            "default": false
+          },
+          "milvus_ok": {
+            "type": "boolean",
+            "title": "Milvus Ok",
+            "default": false
+          },
+          "milvus_in_cooldown": {
+            "type": "boolean",
+            "title": "Milvus In Cooldown",
+            "default": false
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "service_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Url"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "checkpoint_revision": {
+            "type": "string",
+            "title": "Checkpoint Revision",
+            "default": ""
+          },
+          "embedding_dim": {
+            "type": "integer",
+            "title": "Embedding Dim"
+          },
+          "preprocess_version": {
+            "type": "string",
+            "title": "Preprocess Version",
+            "default": ""
+          },
+          "milvus_namespace": {
+            "type": "string",
+            "title": "Milvus Namespace",
+            "default": ""
+          },
+          "index_fingerprint": {
+            "type": "string",
+            "title": "Index Fingerprint",
+            "default": ""
+          },
+          "indexed_crops": {
+            "type": "integer",
+            "title": "Indexed Crops"
+          },
+          "pending_crops": {
+            "type": "integer",
+            "title": "Pending Crops"
+          },
+          "min_score": {
+            "type": "number",
+            "title": "Min Score"
+          },
+          "min_score_cross_camera": {
+            "type": "number",
+            "title": "Min Score Cross Camera",
+            "default": 0.0
+          },
+          "attribute_filter_enabled": {
+            "type": "boolean",
+            "title": "Attribute Filter Enabled",
+            "default": false
+          },
+          "attribute_min_confidence": {
+            "type": "number",
+            "title": "Attribute Min Confidence",
+            "default": 0.0
+          },
+          "attribute_hard_conflicts": {
+            "type": "integer",
+            "title": "Attribute Hard Conflicts",
+            "default": 0
+          },
+          "attribute_hard_confidence": {
+            "type": "number",
+            "title": "Attribute Hard Confidence",
+            "default": 0.0
+          },
+          "attribute_full_weight": {
+            "type": "number",
+            "title": "Attribute Full Weight",
+            "default": 0.0
+          },
+          "attribute_hard_filter_window_hours": {
+            "type": "number",
+            "title": "Attribute Hard Filter Window Hours",
+            "default": 0.0
+          },
+          "face_priority_enabled": {
+            "type": "boolean",
+            "title": "Face Priority Enabled",
+            "default": false
+          },
+          "face_priority_ready": {
+            "type": "boolean",
+            "title": "Face Priority Ready",
+            "default": false
+          },
+          "face_priority_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Priority Error"
+          },
+          "face_provider": {
+            "type": "string",
+            "title": "Face Provider",
+            "default": ""
+          },
+          "face_model": {
+            "type": "string",
+            "title": "Face Model",
+            "default": ""
+          },
+          "face_device": {
+            "type": "string",
+            "title": "Face Device",
+            "default": ""
+          },
+          "face_candidate_limit": {
+            "type": "integer",
+            "title": "Face Candidate Limit",
+            "default": 0
+          },
+          "face_min_quality": {
+            "type": "number",
+            "title": "Face Min Quality",
+            "default": 0.0
+          },
+          "face_strong_reliability": {
+            "type": "number",
+            "title": "Face Strong Reliability",
+            "default": 0.0
+          },
+          "face_rescue_min_body_score": {
+            "type": "number",
+            "title": "Face Rescue Min Body Score",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "model",
+          "embedding_dim",
+          "indexed_crops",
+          "pending_crops",
+          "min_score"
+        ],
+        "title": "ReidStatusResponse"
+      },
+      "VideoProcessResponse": {
+        "properties": {
+          "video_url": {
+            "type": "string",
+            "title": "Video Url"
+          },
+          "frame_interval_seconds": {
+            "type": "number",
+            "title": "Frame Interval Seconds"
+          },
+          "frames_read": {
+            "type": "integer",
+            "title": "Frames Read"
+          },
+          "frames_sampled": {
+            "type": "integer",
+            "title": "Frames Sampled"
+          },
+          "images_created": {
+            "type": "integer",
+            "title": "Images Created"
+          },
+          "crops_created": {
+            "type": "integer",
+            "title": "Crops Created"
+          },
+          "counting_events_created": {
+            "type": "integer",
+            "title": "Counting Events Created"
+          },
+          "image_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Image Ids"
+          },
+          "crop_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Crop Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video_url",
+          "frame_interval_seconds",
+          "frames_read",
+          "frames_sampled",
+          "images_created",
+          "crops_created",
+          "counting_events_created",
+          "image_ids",
+          "crop_ids"
+        ],
+        "title": "VideoProcessResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ImageRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "image_url": {
+            "type": "string",
+            "title": "Image Url"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "image_url",
+          "thumbnail_url",
+          "source_type",
+          "camera_id",
+          "location_id",
+          "captured_at",
+          "created_at"
+        ],
+        "title": "ImageRead"
+      },
+      "VisualSearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 20
+          },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "default": "person_crop"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/SearchFilters"
+          },
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "VisualSearchRequest"
+      },
+      "IndexRebuildResponse": {
+        "properties": {
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "requested": {
+            "type": "integer",
+            "title": "Requested"
+          },
+          "seen": {
+            "type": "integer",
+            "title": "Seen"
+          },
+          "indexed": {
+            "type": "integer",
+            "title": "Indexed"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target",
+          "requested",
+          "seen",
+          "indexed"
+        ],
+        "title": "IndexRebuildResponse"
+      },
+      "Body_reid_search_api_reid_search_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_reid_search_api_reid_search_post"
+      },
+      "PersonCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "employee_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee No"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "PersonCreate"
+      },
+      "SearchResultItem": {
+        "properties": {
+          "crop_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Id"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "crop_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Url"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "original_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Score"
+          },
+          "embedding_rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Rerank Score"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
+          },
+          "rerank_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Reason"
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "camera_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Name"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "labels_zh": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels Zh"
+          },
+          "labels_en": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "score"
+        ],
+        "title": "SearchResultItem"
+      },
+      "PersonRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "employee_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee No"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "employee_no",
+          "phone",
+          "department",
+          "avatar_url",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PersonRead"
+      },
+      "ReidSearchResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReidMatchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "min_score": {
+            "type": "number",
+            "title": "Min Score"
+          },
+          "collapse_window_seconds": {
+            "type": "number",
+            "title": "Collapse Window Seconds",
+            "default": 0.0
+          },
+          "query_mode": {
+            "type": "string",
+            "title": "Query Mode",
+            "default": "single_frame"
+          },
+          "query_frame_count": {
+            "type": "integer",
+            "title": "Query Frame Count",
+            "default": 1
+          },
+          "face_coverage": {
+            "$ref": "#/components/schemas/ReidFaceCoverage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "model",
+          "min_score"
+        ],
+        "title": "ReidSearchResponse"
+      },
+      "FaceSearchResponse": {
+        "properties": {
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "face_bbox": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Bbox"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/FaceMatchItem"
+            },
+            "type": "array",
+            "title": "Matches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matches"
+        ],
+        "title": "FaceSearchResponse"
+      },
+      "Body_recognize_face_api_face_recognize_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_recognize_face_api_face_recognize_post"
+      },
+      "SemanticSearchStatus": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "min_score": {
+            "type": "number",
+            "title": "Min Score"
+          },
+          "total_crops": {
+            "type": "integer",
+            "title": "Total Crops"
+          },
+          "indexed_crops": {
+            "type": "integer",
+            "title": "Indexed Crops"
+          },
+          "labeled_crops": {
+            "type": "integer",
+            "title": "Labeled Crops"
+          },
+          "attributes_enabled": {
+            "type": "boolean",
+            "title": "Attributes Enabled"
+          },
+          "auto_index_on_ingest": {
+            "type": "boolean",
+            "title": "Auto Index On Ingest"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "configured",
+          "model",
+          "min_score",
+          "total_crops",
+          "indexed_crops",
+          "labeled_crops",
+          "attributes_enabled",
+          "auto_index_on_ingest"
+        ],
+        "title": "SemanticSearchStatus"
+      },
+      "ReidMatchItem": {
+        "properties": {
+          "crop_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Crop Id"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "crop_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Url"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "camera_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Name"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "stature_percentile": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stature Percentile"
+          },
+          "stature_agreement": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stature Agreement"
+          },
+          "attribute_agreement": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Agreement"
+          },
+          "attribute_matches": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attribute Matches"
+          },
+          "attribute_conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attribute Conflicts"
+          },
+          "attribute_comparable_count": {
+            "type": "integer",
+            "title": "Attribute Comparable Count",
+            "default": 0
+          },
+          "attribute_match_count": {
+            "type": "integer",
+            "title": "Attribute Match Count",
+            "default": 0
+          },
+          "attribute_conflict_count": {
+            "type": "integer",
+            "title": "Attribute Conflict Count",
+            "default": 0
+          },
+          "attribute_evidence_weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Evidence Weight"
+          },
+          "attribute_conflict_weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribute Conflict Weight"
+          },
+          "face_similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Similarity"
+          },
+          "face_match": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Match"
+          },
+          "face_query_quality": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Query Quality"
+          },
+          "face_candidate_quality": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Candidate Quality"
+          },
+          "face_reliability": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Reliability"
+          },
+          "face_query_identity_verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Query Identity Verified"
+          },
+          "face_candidate_identity_verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Candidate Identity Verified"
+          },
+          "face_candidate_source_crop_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Candidate Source Crop Id"
+          },
+          "fusion_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fusion Score"
+          },
+          "evidence_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Level"
+          },
+          "decision_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Reason"
+          },
+          "frame_count": {
+            "type": "integer",
+            "title": "Frame Count",
+            "default": 1
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "crop_id",
+          "score"
+        ],
+        "title": "ReidMatchItem"
+      },
+      "FaceMatchItem": {
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Person Id"
+          },
+          "person_name": {
+            "type": "string",
+            "title": "Person Name"
+          },
+          "face_embedding_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Face Embedding Id"
+          },
+          "similarity": {
+            "type": "number",
+            "title": "Similarity"
+          },
+          "quality_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Score"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "crop_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "person_id",
+          "person_name",
+          "face_embedding_id",
+          "similarity"
+        ],
+        "title": "FaceMatchItem"
+      },
+      "SemanticSearchItem": {
+        "properties": {
+          "crop_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Id"
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "crop_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crop Url"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "original_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Score"
+          },
+          "embedding_rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Rerank Score"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
+          },
+          "rerank_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Reason"
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "location_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Name"
+          },
+          "camera_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Id"
+          },
+          "camera_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Camera Name"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "labels_zh": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels Zh"
+          },
+          "labels_en": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels En"
+          },
+          "match_type": {
+            "type": "string",
+            "const": "semantic_candidate",
+            "title": "Match Type",
+            "default": "semantic_candidate"
+          },
+          "duplicate_crop_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Duplicate Crop Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "score"
+        ],
+        "title": "SemanticSearchItem"
+      },
+      "ReidFaceCoverage": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "unavailable",
+              "no_candidates",
+              "query_unavailable",
+              "candidate_unavailable",
+              "compared",
+              "error"
+            ],
+            "title": "Status",
+            "default": "no_candidates"
+          },
+          "query_face_found": {
+            "type": "boolean",
+            "title": "Query Face Found",
+            "default": false
+          },
+          "query_face_quality": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Face Quality"
+          },
+          "query_identity_verified": {
+            "type": "boolean",
+            "title": "Query Identity Verified",
+            "default": false
+          },
+          "query_attempted_count": {
+            "type": "integer",
+            "title": "Query Attempted Count",
+            "default": 0
+          },
+          "candidate_attempted_count": {
+            "type": "integer",
+            "title": "Candidate Attempted Count",
+            "default": 0
+          },
+          "shortlist_count": {
+            "type": "integer",
+            "title": "Shortlist Count",
+            "default": 0
+          },
+          "compared_count": {
+            "type": "integer",
+            "title": "Compared Count",
+            "default": 0
+          },
+          "borrowed_candidate_count": {
+            "type": "integer",
+            "title": "Borrowed Candidate Count",
+            "default": 0
+          },
+          "hard_match_count": {
+            "type": "integer",
+            "title": "Hard Match Count",
+            "default": 0
+          },
+          "hard_conflict_count": {
+            "type": "integer",
+            "title": "Hard Conflict Count",
+            "default": 0
+          },
+          "query_absence_reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Query Absence Reasons"
+          },
+          "candidate_absence_reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Candidate Absence Reasons"
+          }
+        },
+        "type": "object",
+        "title": "ReidFaceCoverage",
+        "description": "Per-request face work before final admission, not a global model health claim."
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "实际部署由中间件执行，账号密码单独配置，本文不包含凭据。"
+      }
+    }
+  },
+  "x-source": {
+    "verified_at": "2026-09-09T09:52:52+08:00",
+    "deployment_image": "sha256:40631812480c9a42a0cefdf398c47e48c32d083a4d9ac9bba13330df24ecd51b",
+    "openapi_sha256": "b6ad18206daf7daddedc1beb07da37083a9ac54e540ae7ebee550a30f6494bd5",
+    "documentation_only_enrichment": [
+      "summary",
+      "description",
+      "tags",
+      "security",
+      "error_responses"
+    ]
+  }
+}

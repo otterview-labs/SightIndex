@@ -34,12 +34,25 @@ class ObservationIndexService:
         # see that event, and the row is written with a NULL similarity that nothing ever
         # corrects unless some later pipeline happens to upsert the same crop again.
         self.db.flush()
+        self.db.refresh(crop, attribute_names=["person_id", "person_id_source"])
         image = self.db.get(Image, crop.image_id)
         person = self.db.get(Person, crop.person_id) if crop.person_id else None
         event = self._latest_recognition_event(crop.id)
-        if event and event.person_id and (person is None or person.id != event.person_id):
+        if (
+            not crop.identity_is_protected
+            and event
+            and event.person_id
+            and (person is None or person.id != event.person_id)
+        ):
             person = self.db.get(Person, event.person_id)
-        face_embedding = self._face_embedding(person.id if person else None, crop.id)
+        identity_event = event
+        if crop.identity_is_protected and event and event.person_id != crop.person_id:
+            identity_event = None
+        face_embedding = (
+            None
+            if crop.identity_is_protected and person is None
+            else self._face_embedding(person.id if person else None, crop.id)
+        )
         vl_embedding = self._vl_embedding(crop.id)
         stream = self._stream(crop.camera_id or (image.camera_id if image else None))
 
@@ -67,12 +80,16 @@ class ObservationIndexService:
         row.person_name = person.name if person else None
         row.employee_no = person.employee_no if person else None
         row.department = person.department if person else None
-        row.recognition_result_type = event.result_type if event else None
+        row.recognition_result_type = identity_event.result_type if identity_event else None
         row.face_similarity = (
-            float(event.similarity) if event and event.similarity is not None else None
+            float(identity_event.similarity)
+            if identity_event and identity_event.similarity is not None
+            else None
         )
         row.face_confidence = (
-            float(event.confidence) if event and event.confidence is not None else None
+            float(identity_event.confidence)
+            if identity_event and identity_event.confidence is not None
+            else None
         )
         row.face_embedding_id = face_embedding.id if face_embedding else None
         row.face_embedding_model = face_embedding.face_model if face_embedding else None

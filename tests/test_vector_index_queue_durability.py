@@ -10,6 +10,7 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
+from test_api_smoke import _sample_image_bytes
 
 
 def load_app(monkeypatch, tmp_path, name: str, **env: str):
@@ -414,7 +415,7 @@ def test_process_endpoint_reports_full_outbox_and_does_not_commit_crop(monkeypat
             db.commit()
         upload = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", b"\xff\xd8\xff\xdbfake", "image/jpeg")},
+            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
         )
         assert upload.status_code == 200
         response = client.post(f"/api/images/{upload.json()['id']}/process")
@@ -453,7 +454,7 @@ def test_image_upload_reports_full_outbox_and_removes_upload(monkeypatch, tmp_pa
             db.commit()
         response = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", b"image", "image/jpeg")},
+            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
         )
 
     assert response.status_code == 503
@@ -495,7 +496,7 @@ def test_synchronous_ingest_commits_image_and_crop_markers(monkeypatch, tmp_path
     with TestClient(main.create_app()) as client:
         upload = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", b"image", "image/jpeg")},
+            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
         )
         assert upload.status_code == 200
         process = client.post(f"/api/images/{upload.json()['id']}/process")

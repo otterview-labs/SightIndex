@@ -3,12 +3,13 @@ import logging
 import shutil
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib import error, request
 
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
@@ -382,41 +383,63 @@ class FrameProcessingService:
         original_thumbnail_url = image.thumbnail_url
         annotated_url: str | None = None
 
-        raw_detections = detections if detections is not None else self.detector.detect(image_path)
-        image_detections = self.quality_filter_detections(raw_detections)
-        if image_detections:
-            annotated_url = self._create_annotated_frame_file(image_path, image_detections)
-            if annotated_url:
-                image.thumbnail_url = annotated_url
-                self.db.add(image)
-
         crops: list[PersonCrop] = []
-        # Stature needs the frame's edges to tell a whole person from a clipped one, and reading
-        # them back off disk per crop is a file open the capture loop does not need.
-        frame_width, frame_height = self._read_image_size(image.image_url)
-        for detection in image_detections:
-            crop_url = self._create_crop_file(image_path, detection)
-            crop_width, crop_height = self._read_image_size(crop_url)
-            crop = PersonCrop(
-                image_id=image.id,
-                crop_url=crop_url,
-                bbox={
-                    **detection.bbox,
-                    "confidence": detection.confidence,
-                    "label": detection.label,
-                    "crop_width": crop_width,
-                    "crop_height": crop_height,
-                    "frame_width": frame_width,
-                    "frame_height": frame_height,
-                    "quality_pass": True,
-                },
-                camera_id=image.camera_id,
-                location_id=image.location_id,
-                captured_at=image.captured_at,
-            )
-            self.db.add(crop)
-            crops.append(crop)
+        created_crop_urls: list[str] = []
         try:
+            self.db.flush()
+            self.db.execute(
+                update(Image)
+                .where(Image.id == image.id)
+                .values(processed_at=Image.processed_at)
+                .execution_options(synchronize_session=False)
+            )
+            self.db.refresh(image)
+            original_thumbnail_url = image.thumbnail_url
+            existing = list(self.db.scalars(
+                select(PersonCrop)
+                .where(PersonCrop.image_id == image.id)
+                .order_by(PersonCrop.created_at, PersonCrop.id)
+            ))
+            if image.processed_at is not None or existing:
+                image.processed_at = image.processed_at or datetime.now(UTC)
+                self.db.commit()
+                return existing
+            raw_detections = (
+                detections if detections is not None else self.detector.detect(image_path)
+            )
+            image_detections = self.quality_filter_detections(raw_detections)
+            if image_detections:
+                annotated_url = self._create_annotated_frame_file(image_path, image_detections)
+                if annotated_url:
+                    image.thumbnail_url = annotated_url
+                    self.db.add(image)
+
+            frame_width, frame_height = self._read_image_size(image.image_url)
+            for detection in image_detections:
+                crop_url = self._create_crop_file(image_path, detection)
+                created_crop_urls.append(crop_url)
+                crop_width, crop_height = self._read_image_size(crop_url)
+                crop = PersonCrop(
+                    image_id=image.id,
+                    crop_url=crop_url,
+                    bbox={
+                        **detection.bbox,
+                        "confidence": detection.confidence,
+                        "label": detection.label,
+                        "crop_width": crop_width,
+                        "crop_height": crop_height,
+                        "frame_width": frame_width,
+                        "frame_height": frame_height,
+                        "quality_pass": True,
+                    },
+                    camera_id=image.camera_id,
+                    location_id=image.location_id,
+                    captured_at=image.captured_at,
+                )
+                self.db.add(crop)
+                crops.append(crop)
+            image.processed_at = datetime.now(UTC)
+            self.db.add(image)
             enqueued = self._enqueue_index_jobs(image, crops)
             self.db.commit()
         except Exception:
@@ -424,8 +447,8 @@ class FrameProcessingService:
             # The database transaction is rolled back by the caller, but crop/annotation files
             # are external side effects. Remove only files created by this attempt so queue
             # pressure cannot accumulate orphaned media on a long-running stream.
-            for crop in crops:
-                self._remove_data_file(crop.crop_url)
+            for crop_url in created_crop_urls:
+                self._remove_data_file(crop_url)
             if annotated_url and annotated_url != original_thumbnail_url:
                 self._remove_data_file(annotated_url)
             image.thumbnail_url = original_thumbnail_url
@@ -474,8 +497,12 @@ class FrameProcessingService:
         filename = f"{uuid.uuid4()}{image_path.suffix or '.jpg'}"
         target = self.settings.crops_dir / filename
 
-        if not self._try_crop_with_cv2(image_path, target, detection):
-            shutil.copyfile(image_path, target)
+        try:
+            if not self._try_crop_with_cv2(image_path, target, detection):
+                shutil.copyfile(image_path, target)
+        except Exception:
+            self._remove_data_file(f"/data/crops/{filename}")
+            raise
         return f"/data/crops/{filename}"
 
     def _create_annotated_frame_file(
@@ -497,8 +524,13 @@ class FrameProcessingService:
         target = self.settings.thumbnails_dir / filename
         for detection in detections:
             self._draw_detection_box(cv2, image, detection)
-        if not self._write_jpeg(cv2, target, image, self.settings.thumbnail_jpeg_quality):
-            return None
+        try:
+            if not self._write_jpeg(cv2, target, image, self.settings.thumbnail_jpeg_quality):
+                self._remove_data_file(f"/data/thumbnails/{filename}")
+                return None
+        except Exception:
+            self._remove_data_file(f"/data/thumbnails/{filename}")
+            raise
         return f"/data/thumbnails/{filename}"
 
     def _draw_detection_box(self, cv2: Any, image: Any, detection: Detection) -> None:

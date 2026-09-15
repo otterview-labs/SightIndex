@@ -1,0 +1,67 @@
+services:
+  embedding:
+    image: ${QWEN_EMBEDDING_IMAGE:?set QWEN_EMBEDDING_IMAGE}
+    profiles: ["embedding"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    shm_size: 512m
+    environment:
+      VISUAL_EMBEDDING_PROVIDER: qwen3_vl
+      VISUAL_EMBEDDING_MODEL: /model
+      VISUAL_EMBEDDING_DIM: "2048"
+      VISUAL_EMBEDDING_SERVICE_API_KEY: ${QWEN_EMBEDDING_API_KEY:?set internal embedding API key}
+      DATA_DIR: /tmp/embedding-data
+      DATABASE_URL: "sqlite:///:memory:"
+      MILVUS_ENABLED: "false"
+      REID_ENABLED: "false"
+      AUTO_CREATE_TABLES: "false"
+      STREAM_AUTOSTART_RUNNING: "false"
+      VECTOR_INDEX_ON_INGEST: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - ${QWEN_EMBEDDING_MODEL_DIR:?set QWEN_EMBEDDING_MODEL_DIR}:/model:ro
+      - ${CACHE_DIR:?set CACHE_DIR}/embedding:/home/sightindex/.cache
+    mem_limit: 10g
+    cpus: 4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: ["gpu"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; p=json.load(urllib.request.urlopen('http://127.0.0.1:18032/health',timeout=5)); assert p['ready'] and p['dim']==2048"
+      interval: 20s
+      timeout: 8s
+      start_period: 180s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    environment:
+      VISUAL_EMBEDDING_PROVIDER: qwen3_vl_http
+      VISUAL_EMBEDDING_MODEL: Qwen/Qwen3-VL-Embedding-2B
+      VISUAL_EMBEDDING_DIM: "2048"
+      VISUAL_EMBEDDING_SERVICE_URL: http://embedding:18032
+      VISUAL_EMBEDDING_UPSTREAM_API_KEY: ${QWEN_EMBEDDING_API_KEY:?set internal embedding API key}
+      VISUAL_EMBEDDING_SERVICE_TIMEOUT_SECONDS: "60"
+      VISUAL_EMBEDDING_MAX_CONCURRENCY: "1"
+      VISUAL_EMBEDDING_QUEUE_TIMEOUT_SECONDS: "5"
+      MILVUS_VISUAL_COLLECTION_PREFIX: ${QWEN_VISUAL_COLLECTION_PREFIX:-sightindex_bj_test_qwen3vl2b_768p_v1}

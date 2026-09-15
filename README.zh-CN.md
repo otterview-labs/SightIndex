@@ -5,6 +5,10 @@
 SightIndex 是一项可自行托管的视觉索引与检索服务。它接收图像、视频以及 RTSP/HTTP
 视频流，提取可检索的媒体内容和人员裁剪图，并通过 FastAPI API 与 Vue 控制台提供结果。
 
+仅对接“上传、检索、人脸库”时，请参阅 [核心接口文档](docs/api-core-functions.zh-CN.md)
+和配套的 [精简 OpenAPI](docs/openapi-core-functions.json)，其中注明了北京已部署版本的参数、
+调用顺序、示例与尚未实现的能力。
+
 本仓库是实验性参考实现。人脸识别和人员重识别会处理生物特征数据。请仅在具备合法依据、
 适当同意、访问控制、留存期限和人工复核机制的情况下部署这些功能。
 
@@ -21,6 +25,16 @@ SightIndex 是一项可自行托管的视觉索引与检索服务。它接收图
 
 SightIndex 返回排序后的证据和置信度元数据。ReID 结果只是候选项，不能作为身份认定或
 摄像头之间连续轨迹的证明。
+
+### 问图检索的两种模式
+
+默认配置保留“严格标签匹配”，只查已解析的标签；属性为空时不会命中。
+配置 Qwen 图文 embedding、独立 Milvus 视觉集合并回填历史索引后，可设置
+`SEMANTIC_SEARCH_ENABLED=true`，让页面默认使用“Qwen 语义候选（需核验）”。
+该模式调用独立的 `/api/search/semantic/person-crops`，不改变原标签检索语义。
+返回的相似度不是准确率，颜色、性别等条件仍需核验，结果不用于自动关联人员身份。
+页面显示索引覆盖、属性覆盖及增量索引开关；模型或索引故障显示错误而非空匹配。
+详细的限制、验收和回退步骤见 `deploy/containers/README.md`。
 
 ## 架构
 
@@ -80,8 +94,9 @@ API 请求代理到 `http://127.0.0.1:8000`。
 
 ## 部署
 
-仓库提供的部署资源采用由 systemd 管理的源码构建方式，并通过 Docker Compose 管理
-PostgreSQL 和可选的 Milvus。应用本身目前不提供 Dockerfile。
+原有部署资源采用由 systemd 管理的源码构建方式，并通过 Docker Compose 管理
+PostgreSQL 和可选的 Milvus。另提供[独立镜像部署入口](deploy/containers/README.md)，
+包含多阶段应用 Dockerfile、隔离的数据库与向量库，以及显式启用的 GPU ReID 服务。
 
 部署指南提供 [English](docs/deployment.md) 和
 [简体中文](docs/deployment.zh-CN.md) 两个版本，其中包括：
@@ -130,6 +145,38 @@ MILVUS_ENABLED=true .venv/bin/python scripts/check_milvus.py
 
 Milvus 默认仅绑定回环地址。不要将 PostgreSQL、Milvus、模型服务或原始媒体存储直接暴露给
 不受信任的网络。
+
+### 身份与计数升级说明
+
+升级时初始化数据库会为 `person_crops` 增加可空的 `person_id_source` 列，不删除旧数据。
+人工标注与人工撤销优先于自动人脸归属；来源不明的已有非空身份保持原值，不猜测来源。
+冲突的人脸事件保留为独立证据，不替换人工身份。回退到旧程序会失去这层保护。
+
+越线 track ID 只是当前视频或流会话内的位置匹配编号，不是跨摄像头身份。
+默认连续 2 个采样帧未匹配或 6 秒未出现后失效，可分别用
+`LINE_CROSSING_TRACK_MAX_MISSED_FRAMES` 和 `LINE_CROSSING_TRACK_IDLE_SECONDS` 调整。
+
+### 上传安全与处理重试
+
+图片上传支持 JPEG、PNG、WebP、BMP、GIF；必须能实际解码，不能只靠扩展名或 MIME 类型。
+服务按 EXIF 方向校正后存为去除元数据的 RGB PNG，动图只取第一帧。
+默认单张图片及其规范化结果各不超过 20 MiB、解码像素不超过 2500 万、单个视频不超过
+128 MiB。可用 `UPLOAD_IMAGE_MAX_BYTES`、`UPLOAD_IMAGE_MAX_PIXELS`、
+`UPLOAD_VIDEO_MAX_BYTES` 调整。非法内容返回 400、不支持的格式返回 415、超限返回 413。
+请求体在 multipart 暂存前也限制总字节数，分块上传同样生效；额外允许 64 KiB 封装开销，
+非视频上传请求另预留 base64 膨胀空间。这不替代认证以及网关的限流、并发控制。
+
+`/data` 仅提供支持的图片、视频扩展名，并附带 `nosniff` 与限制性 sandbox CSP。
+旧版遗留的 HTML、SVG 和其他非媒体文件现在返回 404，但不会自动删除。
+
+数据库初始化新增可空的 `images.processed_at`。同一图片重复或并发处理、以及无检测结果的
+图片重试，都复用已完成结果，不重复生成裁剪或索引任务。已有裁剪的旧图片同样复用，
+保留人工身份。提交前失败会回滚完成标记并清理本次新增文件，允许重试。
+不自动清理历史重复记录；更换模型后重新检测需要独立、明确的数据重处理流程，
+不能再用重复调用 `/process` 实现。
+
+按姓名搜索不再用历史识别事件覆盖当前身份或人工撤销；结构化属性检索按稳定分页扫描
+过滤后的历史记录，不再静默只查最近 500 条。
 
 ## 模型服务
 

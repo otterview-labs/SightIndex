@@ -14,11 +14,34 @@ from app.schemas.media import (
     SearchResponse,
     VisualSearchRequest,
 )
+from app.schemas.semantic_search import (
+    SemanticSearchRequest,
+    SemanticSearchResponse,
+    SemanticSearchStatus,
+)
 from app.services.observation_index import ObservationIndexService
 from app.services.search import VisualSearchService
+from app.services.semantic_search import SemanticSearchService, SemanticSearchUnavailable
 from app.services.vector_index import VectorIndexingService
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+@router.get("/semantic/status", response_model=SemanticSearchStatus)
+def semantic_search_status(db: DBSession, settings: AppSettings) -> SemanticSearchStatus:
+    return SemanticSearchService(db, settings).status()
+
+
+@router.post("/semantic/person-crops", response_model=SemanticSearchResponse)
+def semantic_search_person_crops(
+    payload: SemanticSearchRequest, db: DBSession, settings: AppSettings
+) -> SemanticSearchResponse:
+    try:
+        return SemanticSearchService(db, settings).search(payload)
+    except SemanticSearchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/images", response_model=SearchResponse)

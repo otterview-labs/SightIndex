@@ -88,6 +88,7 @@ class PersonService:
         """
 
         crop.person_id = person.id
+        crop.person_id_source = "manual"
         self.db.add(crop)
         if not person.avatar_url and crop.crop_url:
             person.avatar_url = crop.crop_url
@@ -102,6 +103,7 @@ class PersonService:
         """Takes the name back off a crop, for when the label was wrong."""
 
         crop.person_id = None
+        crop.person_id_source = "manual"
         self.db.add(crop)
         self.db.flush()
         ObservationIndexService(self.db, self.settings).upsert_crop(crop)
@@ -699,7 +701,15 @@ class PersonService:
             crop.id: crop
             for crop in self.db.scalars(select(PersonCrop).where(PersonCrop.id.in_(unique_ids)))
         }
-        return [crops_by_id[crop_id] for crop_id in unique_ids if crop_id in crops_by_id]
+        return [
+            crop
+            for crop_id in unique_ids
+            if (crop := crops_by_id.get(crop_id)) is not None
+            and (
+                crop.person_id == person.id
+                or (crop.person_id is None and not crop.identity_is_protected)
+            )
+        ]
 
     def _trajectory_face_seed_paths(self, person: Person, limit: int) -> list[Path]:
         if limit <= 0:
@@ -861,6 +871,8 @@ class PersonService:
             return False
         if crop.person_id is not None and crop.person_id != person.id:
             return False
+        if crop.identity_is_protected:
+            return crop.person_id == person.id
         if event is not None and event.person_id is not None and event.person_id != person.id:
             return False
         return True

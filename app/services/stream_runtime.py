@@ -3,6 +3,7 @@ import shutil
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -206,24 +207,19 @@ class StreamRuntime:
                     if counting_line is not None:
                         crossings = []
                         tracks_before_crossing = {
-                            track_id: PersonTrack(
-                                id=track.id,
-                                center=track.center,
-                                side=track.side,
-                                counted=track.counted,
-                            )
+                            track_id: replace(track)
                             for track_id, track in tracks.items()
                         }
                         next_track_id_before_crossing = next_track_id
-                        if detections:
-                            count_service = VideoProcessingService(db, settings)
-                            crossings, next_track_id = count_service._line_crossings(
-                                detections=detections,
-                                frame=frame,
-                                line=counting_line,
-                                tracks=tracks,
-                                next_track_id=next_track_id,
-                            )
+                        count_service = VideoProcessingService(db, settings)
+                        crossings, next_track_id = count_service._line_crossings(
+                            detections=detections,
+                            frame=frame,
+                            line=counting_line,
+                            tracks=tracks,
+                            next_track_id=next_track_id,
+                            observed_at=captured_at.timestamp(),
+                        )
                         if not crossings:
                             reason = self._skip_reason(raw_detections, detections)
                             last_diagnostic_at = self._log_diagnostic(

@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from fastapi import UploadFile
@@ -41,6 +42,8 @@ class PersonTrack:
     center: tuple[float, float]
     side: float
     counted: bool = False
+    last_seen_at: float = 0.0
+    missed_frames: int = 0
 
 
 @dataclass(frozen=True)
@@ -203,15 +206,14 @@ class VideoProcessingService:
                     self.processor.detect_image_path(frame_file.path)
                 )
                 if counting_line is not None:
-                    crossings: list[LineCrossing] = []
-                    if detections:
-                        crossings, next_track_id = self._line_crossings(
-                            detections=detections,
-                            frame=frame,
-                            line=counting_line,
-                            tracks=tracks,
-                            next_track_id=next_track_id,
-                        )
+                    crossings, next_track_id = self._line_crossings(
+                        detections=detections,
+                        frame=frame,
+                        line=counting_line,
+                        tracks=tracks,
+                        next_track_id=next_track_id,
+                        observed_at=frame_file.captured_at.timestamp(),
+                    )
                     if not crossings:
                         frame_file.path.unlink(missing_ok=True)
                         active_frame_path = None
@@ -367,6 +369,7 @@ class VideoProcessingService:
             line=line,
             tracks=tracks,
             next_track_id=next_track_id,
+            observed_at=counted_at.timestamp(),
         )
         crops_by_detection_index = {
             index: crop for index, crop in enumerate(crops or [])
@@ -395,6 +398,13 @@ class VideoProcessingService:
         for crossing in crossings:
             crop = crops_by_detection_index.get(crossing.detection_index)
             recognition_event = self._recognition_event_for_crop(crop)
+            if (
+                crop is not None
+                and crop.identity_is_protected
+                and recognition_event is not None
+                and recognition_event.person_id != crop.person_id
+            ):
+                recognition_event = None
             person_id = (
                 recognition_event.person_id
                 if recognition_event and recognition_event.person_id
@@ -428,7 +438,13 @@ class VideoProcessingService:
         line: CountingLine,
         tracks: dict[int, PersonTrack],
         next_track_id: int,
+        *,
+        observed_at: float | None = None,
     ) -> tuple[list[LineCrossing], int]:
+        timestamp = monotonic() if observed_at is None else observed_at
+        for track_id, track in list(tracks.items()):
+            if timestamp - track.last_seen_at >= self.settings.line_crossing_track_idle_seconds:
+                del tracks[track_id]
         height, width = frame.shape[:2]
         matched_track_ids: set[int] = set()
         crossings: list[LineCrossing] = []
@@ -437,12 +453,16 @@ class VideoProcessingService:
             side = self._line_side(line, center)
             track = self._match_track(center, tracks, matched_track_ids)
             if track is None:
-                tracks[next_track_id] = PersonTrack(id=next_track_id, center=center, side=side)
+                tracks[next_track_id] = PersonTrack(
+                    id=next_track_id, center=center, side=side, last_seen_at=timestamp
+                )
                 matched_track_ids.add(next_track_id)
                 next_track_id += 1
                 continue
 
             matched_track_ids.add(track.id)
+            track.last_seen_at = timestamp
+            track.missed_frames = 0
             if not track.counted and self._crossed_line(track.side, side):
                 direction = "a_to_b" if track.side < side else "b_to_a"
                 crossings.append(LineCrossing(detection_index=detection_index, direction=direction))
@@ -450,6 +470,11 @@ class VideoProcessingService:
             track.center = center
             if abs(side) > 0.0001:
                 track.side = side
+        for track_id, track in list(tracks.items()):
+            if track_id not in matched_track_ids:
+                track.missed_frames += 1
+                if track.missed_frames >= self.settings.line_crossing_track_max_missed_frames:
+                    del tracks[track_id]
         return crossings, next_track_id
 
     def _recognition_event_for_crop(self, crop: PersonCrop | None) -> RecognitionEvent | None:

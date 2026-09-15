@@ -45,6 +45,16 @@ def init_db() -> None:
 def _ensure_compatible_schema() -> None:
     inspector = inspect(engine)
     table_names = inspector.get_table_names()
+    if "images" in table_names:
+        image_columns = {column["name"] for column in inspector.get_columns("images")}
+        if "processed_at" not in image_columns:
+            column_type = (
+                "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+            )
+            with engine.begin() as connection:
+                connection.execute(
+                    text(f"ALTER TABLE images ADD COLUMN processed_at {column_type}")
+                )
     if "crop_face_extractions" in table_names:
         face_cache_columns = {
             column["name"] for column in inspector.get_columns("crop_face_extractions")
@@ -143,6 +153,11 @@ def _ensure_compatible_schema() -> None:
 
     if "person_crops" in table_names:
         person_crop_columns = {column["name"] for column in inspector.get_columns("person_crops")}
+        if "person_id_source" not in person_crop_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("ALTER TABLE person_crops ADD COLUMN person_id_source VARCHAR")
+                )
         if "attributes" not in person_crop_columns:
             column_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
             with engine.begin() as connection:

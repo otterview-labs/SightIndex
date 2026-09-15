@@ -7,6 +7,7 @@ import types
 import uuid
 from base64 import b64encode
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,14 @@ def load_app(monkeypatch, tmp_path, name: str):
         if module_name == "main" or module_name.startswith("app."):
             sys.modules.pop(module_name)
     return importlib.import_module("main")
+
+
+def _sample_image_bytes() -> bytes:
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (128, 256), (96, 96, 96)).save(buffer, format="JPEG")
+    return buffer.getvalue()
 
 
 def test_health(monkeypatch, tmp_path):
@@ -90,6 +99,47 @@ def test_basic_auth_protects_app_when_configured(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+@pytest.mark.parametrize("credential", ["测试:wrong", "viewer:错误", "viewer:secret"])
+def test_basic_auth_handles_utf8_credentials(monkeypatch, tmp_path, credential):
+    monkeypatch.setenv("APP_BASIC_AUTH_USERNAME", "viewer")
+    monkeypatch.setenv("APP_BASIC_AUTH_PASSWORD", "secret")
+    main = load_app(monkeypatch, tmp_path, "test-basic-auth-utf8")
+    token = b64encode(credential.encode("utf-8")).decode("ascii")
+    with TestClient(main.create_app()) as client:
+        response = client.get("/api/persons", headers={"Authorization": f"Basic {token}"})
+    assert response.status_code == (200 if credential == "viewer:secret" else 401)
+
+
+def test_basic_auth_accepts_configured_utf8_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_BASIC_AUTH_USERNAME", "测试")
+    monkeypatch.setenv("APP_BASIC_AUTH_PASSWORD", "口令")
+    main = load_app(monkeypatch, tmp_path, "test-basic-auth-utf8-configured")
+    token = b64encode("测试:口令".encode()).decode("ascii")
+    with TestClient(main.create_app()) as client:
+        response = client.get("/api/persons", headers={"Authorization": f"Basic {token}"})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/v1/embeddings", "/api/embeddings/visual", "/api/embeddings/image-vector"],
+)
+def test_embedding_endpoints_require_basic_auth_without_a_service_key(
+    monkeypatch, tmp_path, endpoint
+):
+    monkeypatch.setenv("APP_BASIC_AUTH_USERNAME", "viewer")
+    monkeypatch.setenv("APP_BASIC_AUTH_PASSWORD", "secret")
+    monkeypatch.setenv("VISUAL_EMBEDDING_SERVICE_API_KEY", "")
+    main = load_app(monkeypatch, tmp_path, "test-embedding-basic-auth-fallback")
+    with TestClient(main.create_app()) as client:
+        assert client.post(endpoint, json={}).status_code == 401
+        token = b64encode(b"viewer:secret").decode("ascii")
+        response = client.post(
+            endpoint, json={}, headers={"Authorization": f"Basic {token}"}
+        )
+        assert response.status_code == 422
 
 
 def test_openai_compatible_embeddings_uses_bearer_without_basic_auth(monkeypatch, tmp_path):
@@ -1370,7 +1420,7 @@ def test_image_upload(monkeypatch, tmp_path):
     with TestClient(main.create_app()) as client:
         response = client.post(
             "/api/images/upload",
-            files={"file": ("sample.jpg", b"fake-image", "image/jpeg")},
+            files={"file": ("sample.jpg", _sample_image_bytes(), "image/jpeg")},
         )
     assert response.status_code == 200
     payload = response.json()
@@ -3009,7 +3059,7 @@ def test_visual_search_does_not_fallback_to_score_zero_when_vector_provider_fail
     with TestClient(main.create_app()) as client:
         upload_response = client.post(
             "/api/images/upload",
-            files={"file": ("sample.jpg", b"fake-image", "image/jpeg")},
+            files={"file": ("sample.jpg", _sample_image_bytes(), "image/jpeg")},
         )
         assert upload_response.status_code == 200
 

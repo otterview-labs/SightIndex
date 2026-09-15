@@ -5,7 +5,10 @@ import type { SearchResultItem } from "@/api/types";
 import { structuredAttributeChips } from "@/utils/attributes";
 import { fmtTime, formatScore, shortId, shortText } from "@/utils/format";
 
-const props = defineProps<{ item: SearchResultItem }>();
+const props = defineProps<{
+  item: SearchResultItem & { duplicate_crop_ids?: string[] };
+  semantic?: boolean;
+}>();
 
 const imageUrl = computed(() => props.item.crop_url || props.item.image_url || "");
 
@@ -41,10 +44,14 @@ const hasRerankScore = computed(
   <article class="question-result-card">
     <a class="question-card-cover" :href="imageUrl" target="_blank" rel="noreferrer">
       <img :src="imageUrl" alt="检索结果" loading="lazy" decoding="async" />
-      <span v-if="hasScore" class="score-badge">score {{ formatScore(item.score) }}</span>
+      <span v-if="hasScore" class="score-badge">{{ semantic ? "相似度" : "score" }} {{ semantic ? item.score.toFixed(3) : formatScore(item.score) }}</span>
     </a>
     <div class="question-card-body">
       <strong>{{ title }}</strong>
+      <p v-if="semantic">语义候选 · 标签未核验 · 非身份确认</p>
+      <p v-if="item.duplicate_crop_ids?.length">
+        合并 {{ item.duplicate_crop_ids.length }} 条同内容记录
+      </p>
       <div class="score-row">
         <span v-if="hasEmbeddingScore" class="score-pill">
           向量 {{ formatScore(item.embedding_rerank_score) }}

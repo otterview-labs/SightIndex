@@ -1,4 +1,5 @@
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -254,3 +255,54 @@ def test_the_confidence_floor_drops_low_scoring_detections(tmp_path):
     ])
 
     assert [d.confidence for d in kept] == [0.93]
+
+
+def test_crop_write_failure_cleans_only_files_from_this_attempt(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock
+
+    settings = Settings(data_dir=tmp_path, person_detector="whole_frame")
+    settings.frames_dir.mkdir(parents=True)
+    settings.crops_dir.mkdir(parents=True)
+    settings.thumbnails_dir.mkdir(parents=True)
+    source = settings.frames_dir / "source.jpg"
+    original_thumbnail = settings.thumbnails_dir / "original.jpg"
+    annotation = settings.thumbnails_dir / "new.jpg"
+    prior_crop = settings.crops_dir / "previous.jpg"
+    for filename in (source, original_thumbnail, prior_crop):
+        filename.write_bytes(b"existing")
+    db = MagicMock()
+    service = FrameProcessingService(db, settings)
+    image = Image(
+        id=uuid.uuid4(),
+        image_url="/data/frames/source.jpg",
+        thumbnail_url="/data/thumbnails/original.jpg",
+    )
+    calls = 0
+
+    def write_crop(image_path, target, detection):
+        nonlocal calls
+        calls += 1
+        target.write_bytes(b"partial")
+        if calls == 2:
+            raise OSError("simulated write failure")
+        return True
+
+    def annotate(*args):
+        annotation.write_bytes(b"annotation")
+        return "/data/thumbnails/new.jpg"
+
+    monkeypatch.setattr(service, "_try_crop_with_cv2", write_crop)
+    monkeypatch.setattr(service, "_create_annotated_frame_file", annotate)
+    monkeypatch.setattr(service, "_read_image_size", lambda url: (100, 100))
+    detection = Detection(bbox={"x": 1, "y": 1, "width": 50, "height": 80}, confidence=1.0)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        service.process_image(image, [detection, detection])
+
+    assert list(settings.crops_dir.iterdir()) == [prior_crop]
+    assert source.read_bytes() == b"existing"
+    assert original_thumbnail.read_bytes() == b"existing"
+    assert not annotation.exists()
+    assert image.thumbnail_url == "/data/thumbnails/original.jpg"
+    db.rollback.assert_called_once()
+    db.commit.assert_not_called()

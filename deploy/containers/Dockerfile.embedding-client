@@ -1,0 +1,8 @@
+ARG SIGHTINDEX_BASE_IMAGE
+FROM ${SIGHTINDEX_BASE_IMAGE}
+USER root
+COPY deploy/containers/patch_embedding_upstream_key.py /tmp/patch_embedding_upstream_key.py
+RUN python /tmp/patch_embedding_upstream_key.py \
+    && rm /tmp/patch_embedding_upstream_key.py \
+    && python -c "from app.config.settings import Settings; assert 'visual_embedding_upstream_api_key' in Settings.model_fields"
+USER sightindex

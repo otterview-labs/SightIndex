@@ -1,8 +1,9 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import Select, String, and_, cast, or_, select
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings, get_settings
@@ -136,7 +137,17 @@ class VisualSearchService:
         if not crops:
             event_stmt = (
                 select(RecognitionEvent)
-                .where(RecognitionEvent.person_id.in_(person_ids))
+                .join(PersonCrop, RecognitionEvent.crop_id == PersonCrop.id)
+                .where(
+                    RecognitionEvent.person_id.in_(person_ids),
+                    or_(
+                        PersonCrop.person_id == RecognitionEvent.person_id,
+                        and_(
+                            PersonCrop.person_id.is_(None),
+                            PersonCrop.person_id_source.is_(None),
+                        ),
+                    ),
+                )
                 .order_by(RecognitionEvent.recognized_at.desc(), RecognitionEvent.created_at.desc())
                 .limit(payload.top_k)
             )
@@ -148,11 +159,12 @@ class VisualSearchService:
                 event_stmt = event_stmt.where(RecognitionEvent.camera_id == filters.camera_id)
             if filters.location_id:
                 event_stmt = event_stmt.where(RecognitionEvent.location_id == filters.location_id)
-            crop_ids = [
+            event_stmt = self._apply_crop_filters(event_stmt, filters)
+            crop_ids = list(dict.fromkeys(
                 event.crop_id
                 for event in self.db.scalars(event_stmt)
                 if event.crop_id is not None
-            ]
+            ))
             if crop_ids:
                 event_crop_stmt = select(PersonCrop).where(PersonCrop.id.in_(crop_ids))
                 event_crop_stmt = self._apply_crop_filters(event_crop_stmt, filters)
@@ -577,7 +589,7 @@ class StructuredSearchService:
         if not conditions:
             return SearchResponse(items=[]), []
         filters = filters or SearchFilters()
-        stmt = select(PersonCrop).order_by(PersonCrop.created_at.desc()).limit(500)
+        stmt = select(PersonCrop).order_by(PersonCrop.created_at.desc(), PersonCrop.id.desc())
         if filters.person_id:
             stmt = stmt.where(PersonCrop.person_id == filters.person_id)
         if filters.camera_id:
@@ -591,7 +603,7 @@ class StructuredSearchService:
 
         items: list[SearchResultItem] = []
         observation_service = ObservationIndexService(self.db, self.settings)
-        for crop in self.db.scalars(stmt):
+        for crop in self._iter_candidates(stmt):
             score = self._match_score(crop, conditions)
             if score <= 0:
                 continue
@@ -627,6 +639,26 @@ class StructuredSearchService:
                 break
         items.sort(key=lambda item: item.score, reverse=True)
         return SearchResponse(items=items), conditions
+
+    def _iter_candidates(self, statement: Select[tuple[PersonCrop]]) -> Iterator[PersonCrop]:
+        """Keep SQLite's stored timestamp precision when building the next page cursor."""
+        created_at = (
+            cast(PersonCrop.created_at, String)
+            if self.db.get_bind().dialect.name == "sqlite"
+            else PersonCrop.created_at
+        ).label("cursor_created_at")
+        base_statement = statement.add_columns(created_at)
+        page_statement = base_statement
+        while batch := list(self.db.execute(page_statement.limit(500))):
+            for crop, _ in batch:
+                yield crop
+            last, last_created_at = batch[-1]
+            page_statement = base_statement.where(
+                or_(
+                    created_at < last_created_at,
+                    and_(created_at == last_created_at, PersonCrop.id < last.id),
+                )
+            )
 
     def parse_query(self, query: str) -> list[StructuredCondition]:
         normalized = query.lower()

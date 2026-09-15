@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import { attributes as attributesApi, search as searchApi } from "@/api/client";
-import type { SearchFilters, SearchResultItem } from "@/api/types";
+import type { SearchFilters, SearchResultItem, SemanticSearchStatus } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
 import SearchResultCard from "@/components/SearchResultCard.vue";
 import { useSummary } from "@/composables/useSummary";
@@ -30,10 +30,18 @@ const query = ref("");
 const cameraId = ref("");
 const startTime = ref("");
 const endTime = ref("");
+const mode = ref<"semantic" | "structured">("structured");
+const resultMode = ref<"recent" | "semantic" | "structured">("recent");
+const capabilities = ref<SemanticSearchStatus | null>(null);
+const searchNotice = ref("");
+const capabilityError = ref("");
+const semanticEnabled = computed(() =>
+  capabilities.value?.enabled && capabilities.value?.configured,
+);
 
 const results = ref<SearchResultItem[]>([]);
 const hint = ref("按时间分组展示候选裁剪");
-const status = ref<"idle" | "loading" | "empty">("loading");
+const status = ref<"idle" | "loading" | "empty" | "error">("loading");
 const loadingLabel = ref("加载最近裁剪...");
 const searching = ref(false);
 const backfilling = ref(false);
@@ -46,6 +54,11 @@ const dayFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 const groups = computed(() => {
+  if (resultMode.value === "semantic") {
+    return results.value.length
+      ? [{ title: "按语义相似度排序 · 待人工核验", items: results.value }]
+      : [];
+  }
   const today = dayFormatter.format(new Date());
   const buckets = new Map<string, { title: string; items: SearchResultItem[] }>();
   for (const item of results.value) {
@@ -66,6 +79,8 @@ function filters(): SearchFilters {
 }
 
 function showRecentCrops() {
+  resultMode.value = "recent";
+  searchNotice.value = "";
   const fallback: SearchResultItem[] = crops.value.map((crop) => ({
     crop_id: crop.id,
     image_id: crop.image_id,
@@ -85,35 +100,60 @@ function showRecentCrops() {
   }
   results.value = fallback;
   status.value = "idle";
-  hint.value = `最近 ${fallback.length} 个裁剪（尚未执行标签检索）`;
+  hint.value = `最近 ${fallback.length} 个裁剪（尚未执行检索）`;
+}
+
+function changeMode() {
+  results.value = [];
+  resultMode.value = mode.value;
+  searchNotice.value = "";
+  status.value = "idle";
+  hint.value = mode.value === "semantic"
+    ? "语义候选仅表示相似，不代表全部条件成立；请输入描述后检索"
+    : "严格标签匹配仅返回已解析的标签；请输入标签后检索";
 }
 
 async function runSearch(text: string) {
   const trimmed = text.trim();
   if (!trimmed || searching.value) return;
   searching.value = true;
+  const requestedMode = mode.value;
+  resultMode.value = requestedMode;
+  results.value = [];
+  searchNotice.value = "";
   status.value = "loading";
-  loadingLabel.value = "正在匹配结构化标签...";
-  hint.value = "仅返回同时满足全部标签和筛选条件的结果";
+  loadingLabel.value = requestedMode === "semantic" ? "正在检索 Qwen 语义候选..." : "正在匹配结构化标签...";
+  hint.value = requestedMode === "semantic"
+    ? "按视觉语义相似度召回，结果需要人工核验"
+    : "仅返回同时满足全部已解析标签和筛选条件的结果";
   try {
-    const response = await searchApi.personCrops({
+    const payload = {
       query: trimmed,
       top_k: 20,
       filters: filters(),
-      rerank: false,
-    });
+    };
+    const response = requestedMode === "semantic"
+      ? await searchApi.semanticPersonCrops(payload)
+      : await searchApi.personCrops({ ...payload, rerank: false });
+    if ("notice" in response) searchNotice.value = String(response.notice);
     const items = response.items ?? [];
     if (!items.length) {
       results.value = [];
       status.value = "empty";
-      hint.value = `没有匹配“${trimmed}”的结构化标签结果`;
+      hint.value = requestedMode === "semantic"
+        ? `“${trimmed}”暂无达到门槛且可读取的语义候选`
+        : `没有匹配“${trimmed}”的结构化标签结果`;
       return;
     }
     results.value = items;
     status.value = "idle";
-    hint.value = `返回 ${items.length} 个标签命中结果`;
+    hint.value = requestedMode === "semantic"
+      ? `返回 ${items.length} 个语义候选（非标签命中，非身份确认）`
+      : `返回 ${items.length} 个标签命中结果`;
   } catch (error) {
-    status.value = "empty";
+    results.value = [];
+    status.value = "error";
+    hint.value = error instanceof Error ? error.message : "检索服务暂不可用，请稍后重试";
     showError(error);
   } finally {
     searching.value = false;
@@ -146,7 +186,15 @@ async function backfillAttributes() {
 
 onMounted(async () => {
   try {
-    await refresh();
+    await Promise.all([
+      refresh(),
+      searchApi.semanticStatus().then((value) => {
+        capabilities.value = value;
+        if (value.enabled && value.configured) mode.value = "semantic";
+      }).catch(() => {
+        capabilityError.value = "无法读取语义检索状态，暂用严格标签匹配";
+      }),
+    ]);
     showRecentCrops();
   } catch (error) {
     status.value = "empty";
@@ -182,8 +230,21 @@ onMounted(async () => {
           <aside class="question-filter-panel" aria-label="检索筛选">
             <div class="filter-panel-head">
               <strong>筛选条件</strong>
-              <span>相机 / 时间 / 标签</span>
+              <span>模式 / 相机 / 时间</span>
             </div>
+            <label>
+              检索模式
+              <select v-model="mode" name="search_mode" :disabled="searching" @change="changeMode">
+                <option value="semantic" :disabled="!semanticEnabled">Qwen 语义候选（需核验）</option>
+                <option value="structured">严格标签匹配</option>
+              </select>
+            </label>
+            <p v-if="capabilities" class="search-coverage">
+              语义索引 {{ capabilities.indexed_crops }}/{{ capabilities.total_crops }}；
+              已有属性 {{ capabilities.labeled_crops }}/{{ capabilities.total_crops }}
+              <span v-if="!capabilities.auto_index_on_ingest"> · 新增数据自动索引未开启</span>
+            </p>
+            <p v-if="capabilityError" role="status">{{ capabilityError }}</p>
             <label>
               摄像头
               <select v-model="cameraId" name="camera_id">
@@ -219,10 +280,10 @@ onMounted(async () => {
               <button
                 class="button ghost wide"
                 type="button"
-                :disabled="backfilling"
+                :disabled="backfilling || !capabilities?.attributes_enabled"
                 @click="backfillAttributes"
               >
-                {{ backfilling ? "解析中" : "解析最近裁剪" }}
+                {{ backfilling ? "解析中" : capabilities?.attributes_enabled ? "解析最近裁剪" : "属性解析模型未启用" }}
               </button>
             </div>
             <div class="metric-list search-metrics">
@@ -238,14 +299,22 @@ onMounted(async () => {
                 <strong>检索结果</strong>
                 <span>{{ hint }}</span>
               </div>
-              <span class="result-mode">PERSON CROP</span>
+              <span class="result-mode">{{ resultMode === "semantic" ? "语义候选 · 非身份确认" : resultMode === "structured" ? "严格标签" : "最近裁剪" }}</span>
             </div>
+            <p v-if="searchNotice" class="semantic-notice" role="status">{{ searchNotice }}</p>
             <div class="question-results" aria-live="polite">
               <EmptyState v-if="status === 'loading'">{{ loadingLabel }}</EmptyState>
               <EmptyState
+                v-else-if="status === 'error'"
+                title="检索失败"
+                hint="服务错误不代表没有目标；请检查索引或服务状态后重试，没有自动切换到其他检索方式。"
+              />
+              <EmptyState
                 v-else-if="status === 'empty'"
-                title="没有标签命中"
-                hint="请使用衣服颜色、帽子、眼镜、背包、手机、抽烟、跌倒或打架等明确标签。"
+                :title="resultMode === 'semantic' ? '暂无语义候选' : '没有标签命中'"
+                :hint="resultMode === 'semantic'
+                  ? '请调整描述或筛选条件；未召回不代表目标一定不存在。'
+                  : '严格标签匹配依赖已解析的属性；属性为空时不会命中，可切换到语义候选。'"
               />
               <section v-for="group in groups" v-else :key="group.title" class="result-day-group">
                 <div class="result-day-head">
@@ -257,6 +326,7 @@ onMounted(async () => {
                     v-for="(item, index) in group.items"
                     :key="item.crop_id ?? index"
                     :item="item"
+                    :semantic="resultMode === 'semantic'"
                   />
                 </div>
               </section>
@@ -267,3 +337,22 @@ onMounted(async () => {
     </section>
   </main>
 </template>
+
+<style scoped>
+.search-coverage {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.semantic-notice {
+  margin: 12px;
+  padding: 12px 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
+  line-height: 1.6;
+}
+</style>

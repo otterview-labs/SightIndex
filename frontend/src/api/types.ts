@@ -18,6 +18,41 @@ export type SearchResponse = Schemas["SearchResponse"];
 export type VisualSearchRequest = Schemas["VisualSearchRequest"];
 export type IndexRebuildResponse = Schemas["IndexRebuildResponse"];
 
+export interface SemanticSearchRequest {
+  query: string;
+  top_k?: number;
+  filters?: SearchFilters;
+}
+
+export type SemanticSearchItem = SearchResultItem & {
+  match_type: "semantic_candidate";
+  duplicate_crop_ids: string[];
+};
+
+export interface SemanticSearchResponse {
+  mode: "semantic";
+  items: SemanticSearchItem[];
+  model: string;
+  min_score: number;
+  notice: string;
+  scope_crops: number;
+  indexed_scope_crops: number;
+  candidates_examined: number;
+  shortlist_limited: boolean;
+}
+
+export interface SemanticSearchStatus {
+  enabled: boolean;
+  configured: boolean;
+  model: string;
+  min_score: number;
+  total_crops: number;
+  indexed_crops: number;
+  labeled_crops: number;
+  attributes_enabled: boolean;
+  auto_index_on_ingest: boolean;
+}
+
 export type ObservationIndexItem = Schemas["ObservationIndexItem"];
 export type ObservationIndexResponse = Schemas["ObservationIndexResponse"];
 

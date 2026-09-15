@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     database_pool_recycle_seconds: int = Field(default=1800, ge=30, le=86400)
     data_dir: Path = Path("data")
     media_retention_days: int = Field(default=30, ge=1, le=3660)
+    upload_image_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
+    upload_video_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1)
+    upload_image_max_pixels: int = Field(default=25_000_000, ge=1)
     public_base_url: str = "http://localhost:8000"
     auto_create_tables: bool = True
     app_basic_auth_username: str | None = None
@@ -51,6 +54,8 @@ class Settings(BaseSettings):
     count_dedup_seconds: int = Field(default=60, ge=1)
     line_crossing_point: str = "bottom_center"
     line_crossing_match_distance: float = Field(default=0.32, ge=0.01, le=1.0)
+    line_crossing_track_idle_seconds: float = Field(default=6.0, ge=0.1, le=600.0)
+    line_crossing_track_max_missed_frames: int = Field(default=2, ge=1, le=120)
     # One crop per visit rather than one per capture interval. Without this a person lingering
     # at a door is stored every frame -- 127 times over five minutes on this deployment -- and
     # every copy is embedded, indexed and returned, crowding everyone else out of the results.
@@ -153,6 +158,7 @@ class Settings(BaseSettings):
     visual_embedding_instruction: str = "Retrieve images that match the user query."
     visual_embedding_service_url: str | None = None
     visual_embedding_service_api_key: str | None = None
+    visual_embedding_upstream_api_key: str | None = None
     visual_embedding_service_timeout_seconds: int = Field(default=15, ge=1)
     visual_embedding_service_failure_cooldown_seconds: int = Field(
         default=60,
@@ -162,6 +168,9 @@ class Settings(BaseSettings):
     visual_embedding_max_concurrency: int = Field(default=1, ge=1, le=16)
     visual_embedding_queue_timeout_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
     visual_search_min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    semantic_search_enabled: bool = False
+    semantic_search_min_score: float = Field(default=0.25, ge=0.0, le=1.0)
+    semantic_search_max_scope: int = Field(default=10000, ge=1, le=10000)
     qwen3_vl_embedding_repo_dir: Path | None = None
     qwen3_vl_embedding_pythonpath: str | None = None
     qwen3_vl_embedding_torch_dtype: str | None = "bfloat16"

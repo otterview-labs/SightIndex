@@ -121,7 +121,10 @@ class VisualEmbeddingService:
         elif provider in self.qwen3_vl_http_providers:
             vector = _Qwen3VLHTTPVisualRuntime(
                 service_url=self.settings.visual_embedding_service_url,
-                api_key=self.settings.visual_embedding_service_api_key,
+                api_key=(
+                    self.settings.visual_embedding_upstream_api_key
+                    or self.settings.visual_embedding_service_api_key
+                ),
                 instruction=self.settings.visual_embedding_instruction,
                 timeout_seconds=self.settings.visual_embedding_service_timeout_seconds,
                 failure_cooldown_seconds=(
@@ -165,7 +168,10 @@ class VisualEmbeddingService:
         elif provider in self.qwen3_vl_http_providers:
             vector = _Qwen3VLHTTPVisualRuntime(
                 service_url=self.settings.visual_embedding_service_url,
-                api_key=self.settings.visual_embedding_service_api_key,
+                api_key=(
+                    self.settings.visual_embedding_upstream_api_key
+                    or self.settings.visual_embedding_service_api_key
+                ),
                 instruction=self.settings.visual_embedding_instruction,
                 timeout_seconds=self.settings.visual_embedding_service_timeout_seconds,
                 failure_cooldown_seconds=(

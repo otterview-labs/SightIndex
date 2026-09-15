@@ -308,9 +308,11 @@ def stream_mjpeg_preview(
     stream = service.get_stream(stream_id)
     if stream is None:
         raise HTTPException(status_code=404, detail="Stream not found")
+    stream_url = stream.stream_url
+    db.close()
     try:
         frames = service.stream_mjpeg_frames(
-            stream.stream_url,
+            stream_url,
             fps=fps,
             jpeg_quality=jpeg_quality,
         )

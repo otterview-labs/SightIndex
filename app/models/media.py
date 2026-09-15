@@ -19,6 +19,7 @@ class Image(Base):
     camera_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     location_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -39,12 +40,19 @@ class PersonCrop(Base):
     person_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("persons.id"), nullable=True
     )
+    person_id_source: Mapped[str | None] = mapped_column(String, nullable=True)
     camera_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     location_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+    @property
+    def identity_is_protected(self) -> bool:
+        return self.person_id_source == "manual" or (
+            self.person_id_source is None and self.person_id is not None
+        )
 
 
 class PersonObservationIndex(Base):
