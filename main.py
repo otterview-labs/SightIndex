@@ -94,6 +94,15 @@ def _mount_frontend(app: FastAPI) -> None:
     """
 
     index_file = FRONTEND_DIST / "index.html"
+
+    @app.get("/api/{missing_path:path}", include_in_schema=False)
+    def missing_api(missing_path: str) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "API endpoint not found"})
+
+    @app.get("/v1/{missing_path:path}", include_in_schema=False)
+    def missing_openai_api(missing_path: str) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": "API endpoint not found"})
+
     if not index_file.is_file():
         logger.warning(
             "frontend bundle missing at %s; run `npm ci && npm run build` in frontend/",

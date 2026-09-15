@@ -224,3 +224,67 @@ def test_torchvision_compat_is_idempotent_when_namespace_exists(monkeypatch):
 
     assert FakeLibrary.calls == 1
     assert embeddings._TORCHVISION_COMPAT_READY is True
+
+
+def test_visual_embedding_text_model_uses_a_separate_encoder_for_text(monkeypatch):
+    """A CLIP image tower and its multilingual text tower are published as separate
+    sentence-transformers checkpoints sharing one embedding space; embed_text must load and
+    use the text tower, embed_image must still use the image tower."""
+
+    class FakeModel:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def encode(self, item, **kwargs):
+            return [1.0, 0.0] if isinstance(item, str) else [0.0, 1.0]
+
+    loaded_with: list[tuple[str, str]] = []
+
+    def fake_cached_sentence_transformer(model_name: str, device: str):
+        loaded_with.append((model_name, device))
+        return FakeModel(model_name)
+
+    monkeypatch.setattr(
+        embeddings, "_cached_sentence_transformer", fake_cached_sentence_transformer
+    )
+    settings = Settings(
+        visual_embedding_provider="sentence_transformers",
+        visual_embedding_model="clip-image-tower",
+        visual_embedding_text_model="clip-text-tower",
+        visual_embedding_dim=2,
+    )
+    service = VisualEmbeddingService(settings)
+
+    text_vector = service.embed_text("红色上衣")
+
+    assert text_vector == [1.0, 0.0]
+    assert loaded_with == [
+        ("clip-image-tower", ""),
+        ("clip-text-tower", ""),
+    ]
+
+
+def test_visual_embedding_without_a_text_model_reuses_the_image_tower(monkeypatch):
+    class FakeModel:
+        def encode(self, item, **kwargs):
+            return [1.0, 0.0] if isinstance(item, str) else [0.0, 1.0]
+
+    loaded_with: list[str] = []
+
+    def fake_cached_sentence_transformer(model_name: str, device: str):
+        loaded_with.append(model_name)
+        return FakeModel()
+
+    monkeypatch.setattr(
+        embeddings, "_cached_sentence_transformer", fake_cached_sentence_transformer
+    )
+    settings = Settings(
+        visual_embedding_provider="sentence_transformers",
+        visual_embedding_model="clip-image-tower",
+        visual_embedding_dim=2,
+    )
+    service = VisualEmbeddingService(settings)
+
+    service.embed_text("a red shirt")
+
+    assert loaded_with == ["clip-image-tower"]

@@ -13,7 +13,7 @@ from app.models.media import Image, PersonCrop, PersonObservationIndex, VideoStr
 from app.models.persons import Person
 from app.models.vectors import FaceEmbedding, VectorIndexCapacityLock, VLEmbedding
 from app.schemas.common import SearchFilters
-from app.services.time_utils import database_datetime
+from app.services.time_utils import database_datetime, database_search_filters
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,7 @@ class ObservationIndexService:
         row.image_id = crop.image_id
         row.person_id = person.id if person else None
         row.person_name = person.name if person else None
+        row.person_is_vip = bool(person.is_vip) if person else False
         row.employee_no = person.employee_no if person else None
         row.department = person.department if person else None
         row.recognition_result_type = identity_event.result_type if identity_event else None
@@ -201,17 +202,39 @@ class ObservationIndexService:
         only_vl_vector: bool = False,
         only_labeled: bool = False,
     ) -> tuple[list[PersonObservationIndex], int]:
+        from app.services.search import StructuredSearchService
+
+        structured = StructuredSearchService(self.db, self.settings)
+        conditions = structured.parse_query(query or "")
         filters = filters or SearchFilters()
         stmt = select(PersonObservationIndex)
         stmt = self._apply_filters(stmt, filters)
         stmt = self._apply_list_filters(
             stmt,
-            query=query,
+            query=None if conditions else query,
             only_named=only_named,
             only_face_vector=only_face_vector,
             only_vl_vector=only_vl_vector,
             only_labeled=only_labeled,
         )
+        if conditions:
+            rows = []
+            total = 0
+            ordered = stmt.order_by(
+                PersonObservationIndex.captured_at.desc(),
+                PersonObservationIndex.created_at.desc(),
+                PersonObservationIndex.id.desc(),
+            ).execution_options(yield_per=200)
+            for row in self.db.scalars(ordered):
+                if not all(
+                    structured._condition_matches(row.attributes or {}, row.bbox or {}, condition)
+                    for condition in conditions
+                ):
+                    continue
+                if offset <= total < offset + limit:
+                    rows.append(row)
+                total += 1
+            return rows, total
         total = self.db.scalar(
             select(func.count()).select_from(stmt.order_by(None).subquery())
         ) or 0
@@ -269,6 +292,9 @@ class ObservationIndexService:
         return score
 
     def _apply_filters(self, stmt: Any, filters: SearchFilters) -> Any:
+        filters = database_search_filters(
+            filters, self.settings, self.db.get_bind().dialect.name
+        )
         if filters.person_id:
             stmt = stmt.where(PersonObservationIndex.person_id == filters.person_id)
         if filters.camera_id:

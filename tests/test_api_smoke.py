@@ -3651,7 +3651,7 @@ def test_stream_runtime_rolls_back_queue_full_and_processes_next_frame(
     monkeypatch.setattr(
         FrameProcessingService,
         "quality_filter_detections",
-        lambda self, detections: detections,
+        lambda self, detections, frame_width=None, frame_height=None: detections,
     )
 
     def process_frame(self, image, detections=None):

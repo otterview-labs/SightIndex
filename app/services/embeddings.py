@@ -108,6 +108,7 @@ class VisualEmbeddingService:
                 model_name=self.settings.visual_embedding_model,
                 device=self.settings.visual_embedding_device,
                 instruction=self.settings.visual_embedding_instruction,
+                text_model_name=self.settings.visual_embedding_text_model,
             ).embed_text(text)
         elif provider in self.qwen3_vl_providers:
             vector = _Qwen3VLVisualRuntime(
@@ -207,8 +208,18 @@ class _SentenceTransformerVisualRuntime:
         model_name: str,
         device: str | None = None,
         instruction: str | None = None,
+        text_model_name: str | None = None,
     ) -> None:
         self.model = _cached_sentence_transformer(model_name, device or "")
+        # A CLIP image tower and its multilingual text tower are published as separate
+        # sentence-transformers checkpoints that share one embedding space (e.g. clip-ViT-B-32
+        # for images plus clip-ViT-B-32-multilingual-v1 for text); the plain English CLIP
+        # checkpoint cannot encode non-English queries well on its own.
+        self.text_model = (
+            _cached_sentence_transformer(text_model_name, device or "")
+            if text_model_name
+            else self.model
+        )
         self.instruction = instruction
 
     def embed_text(self, text: str) -> list[float]:
@@ -219,10 +230,10 @@ class _SentenceTransformerVisualRuntime:
         if self.instruction:
             kwargs["prompt"] = self.instruction
         try:
-            encoded = self.model.encode(text, **kwargs)
+            encoded = self.text_model.encode(text, **kwargs)
         except TypeError:
             kwargs.pop("prompt", None)
-            encoded = self.model.encode(text, **kwargs)
+            encoded = self.text_model.encode(text, **kwargs)
         return _to_float_vector(encoded)
 
     def embed_image(self, image_path: Path) -> list[float]:

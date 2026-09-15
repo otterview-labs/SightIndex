@@ -13,9 +13,11 @@ from sqlalchemy import select
 
 from app.api.deps import AppSettings, DBSession
 from app.models.media import PersonCrop, VideoStream
+from app.models.persons import Person
 from app.schemas.media import SearchFilters
 from app.schemas.reid import (
     ReidCameraLink,
+    ReidCandidatePoolCoverage,
     ReidFaceCoverage,
     ReidFeedbackRead,
     ReidFeedbackUpsert,
@@ -32,8 +34,10 @@ from app.services.reid_attributes import aggregate_reid_attributes, compare_reid
 from app.services.reid_feedback import FeedbackCropNotFoundError, ReidFeedbackService
 from app.services.reid_fusion import (
     annotate_fusion_decision,
+    enrich_camera_link_face_evidence,
     enrich_face_evidence,
     fusion_rank,
+    prepare_camera_link_face_query,
     reject_reliable_face_mismatches,
 )
 from app.services.reid_index import (
@@ -201,6 +205,22 @@ def _to_items(
         if camera_ids
         else {}
     )
+    # A crop labelled seconds ago can already be a match before its observation row is written
+    # (see the comment above); without this, that crop's name would silently disappear here even
+    # though the label is already saved.
+    pending_person_ids = {crop.person_id for crop in crops.values() if crop.person_id}
+    pending_persons = (
+        {
+            row.id: row
+            for row in db.execute(
+                select(Person.id, Person.name, Person.is_vip).where(
+                    Person.id.in_(pending_person_ids)
+                )
+            )
+        }
+        if pending_person_ids
+        else {}
+    )
 
     items: list[ReidMatchItem] = []
     for match in matches:
@@ -220,6 +240,7 @@ def _to_items(
                     location_name=row.location_name,
                     person_id=row.person_id,
                     person_name=row.person_name,
+                    person_is_vip=row.person_is_vip if row.person_id else None,
                     stature_percentile=stature.get(match.crop_id),
                 )
             )
@@ -238,6 +259,16 @@ def _to_items(
                 location_id=crop.location_id if crop else None,
                 location_name=stream.location_name if stream else None,
                 person_id=crop.person_id if crop else None,
+                person_name=(
+                    pending_persons[crop.person_id].name
+                    if crop and crop.person_id in pending_persons
+                    else None
+                ),
+                person_is_vip=(
+                    pending_persons[crop.person_id].is_vip
+                    if crop and crop.person_id in pending_persons
+                    else None
+                ),
                 stature_percentile=stature.get(match.crop_id),
             )
         )
@@ -598,6 +629,70 @@ def _visit_limits(
     return service.candidate_pool_limit(), visits
 
 
+def _candidate_row_missing_count(db: DBSession, matches: list[ReidMatch]) -> int:
+    """Count vector hits that no longer have a durable SQL crop row.
+
+    Milvus and SQLite are updated independently.  A stale vector must be reported as a data
+    consistency gap, not silently treated as a negative ReID result.  This query is deliberately
+    diagnostic-only and never filters the candidate pool.
+    """
+
+    crop_ids = {match.crop_id for match in matches}
+    if not crop_ids:
+        return 0
+    present = set(db.scalars(select(PersonCrop.id).where(PersonCrop.id.in_(crop_ids))))
+    return len(crop_ids - present)
+
+
+def _candidate_pool_coverage(
+    db: DBSession,
+    service: ReidIndexService,
+    raw_items: list[ReidMatchItem],
+    matches: list[ReidMatch],
+    raw_hit_count: int,
+    pool_limit: int,
+    *,
+    query_camera: uuid.UUID | None,
+) -> ReidCandidatePoolCoverage:
+    """Describe camera coverage before link filtering and ranking.
+
+    The current Milvus collection has no camera field, so a global ANN pool can be exhausted by
+    one busy camera.  Count only non-query cameras here because the link response intentionally
+    excludes the source camera.  ``possibly_truncated`` is deliberately conservative: it is
+    true when the ANN pool was filled and fewer cameras appeared than the SQL coverage markers
+    report, or when that marker count could not be read.  A false value does not prove that every
+    vector was searched.
+    """
+
+    hit_cameras = {
+        item.camera_id
+        for item in raw_items
+        if item.camera_id is not None and item.camera_id != query_camera
+    }
+    try:
+        indexed_camera_count = service.indexed_camera_count(
+            exclude_camera_id=query_camera,
+        )
+    except Exception:
+        # Coverage is explanatory only; a transient SQL issue must never turn a valid ReID
+        # response into a 500.  Keep the unknown count explicit instead of guessing zero.
+        logger.warning("Unable to count indexed ReID cameras", exc_info=True)
+        indexed_camera_count = None
+    possibly_truncated = bool(
+        pool_limit > 0
+        and raw_hit_count >= pool_limit
+        and (indexed_camera_count is None or indexed_camera_count > len(hit_cameras))
+    )
+    return ReidCandidatePoolCoverage(
+        raw_hit_count=raw_hit_count,
+        hit_camera_count=len(hit_cameras),
+        indexed_camera_count=indexed_camera_count,
+        pool_limit=pool_limit,
+        sql_row_missing_count=_candidate_row_missing_count(db, matches),
+        possibly_truncated=possibly_truncated,
+    )
+
+
 @router.get("/status", response_model=ReidStatusResponse)
 def reid_status(db: DBSession, settings: AppSettings) -> ReidStatusResponse:
     service = ReidIndexService(db, settings)
@@ -770,9 +865,10 @@ def reid_camera_links(
         # No floor: a camera's best candidate is the answer even when it is a weak one, and the
         # flag says so. Filtering here would silently drop whole cameras from the trace.
         query_crops = service.query_tracklet(crop)
+        pool_limit = service.candidate_pool_limit()
         matches = service.search_by_crop_gallery(
             query_crops,
-            service.candidate_pool_limit(),
+            pool_limit,
             min_score=0.0,
         )
     except (ReidRuntimeError, VectorIndexError) as exc:
@@ -783,6 +879,16 @@ def reid_camera_links(
     # cannot settle on its own: a real crossing and a coincidence both score in the 0.43-0.48
     # band. In the search endpoint the same term does nothing, because the 0.45 admission bar
     # and the per-camera quota leave at most one cross-camera row with nothing to reorder.
+    raw_items = _to_items(db, settings, matches)
+    candidate_coverage = _candidate_pool_coverage(
+        db,
+        service,
+        raw_items,
+        matches,
+        len(matches),
+        pool_limit,
+        query_camera=crop.camera_id,
+    )
     query_attributes = _query_tracklet_attributes(db, settings, crop, query_crops)
     query_stature = _stature_percentile(crop.attributes)
     best: dict[
@@ -790,7 +896,7 @@ def reid_camera_links(
         tuple[tuple[int, float, float], ReidMatchItem],
     ] = {}
     linked_items, attribute_bonus = _filter_by_attributes(
-        db, settings, _to_items(db, settings, matches), query_attributes
+        db, settings, raw_items, query_attributes
     )
     linked_items = [
         item
@@ -799,7 +905,44 @@ def reid_camera_links(
         and item.camera_id is not None
         and item.camera_id != crop.camera_id
     ]
-    face_coverage = enrich_face_evidence(db, settings, crop, linked_items, query_crops=query_crops)
+    prepared_query = prepare_camera_link_face_query(
+        db, settings, crop, has_candidates=bool(linked_items), query_crops=query_crops
+    )
+    face_coverage = prepared_query.coverage
+    if prepared_query.face is not None:
+        # Only face verification needs distinct occurrences here. Without a usable query face,
+        # preserve body ranking and avoid fetching every candidate vector plus an N² comparison.
+        # With a face, require complete-link vector evidence before borrowing or rejecting visits.
+        vectors: dict[uuid.UUID, list[float]] = {}
+        collapse_window = (
+            settings.reid_collapse_window_seconds
+            if settings.reid_collapse_identity_threshold > 0
+            else 0.0
+        )
+        if collapse_window > 0 and linked_items:
+            try:
+                vectors = service.index.fetch_vectors(
+                    REID_OBJECT_TYPE, [item.crop_id for item in linked_items]
+                )
+            except VectorIndexError:
+                logger.warning(
+                    "ReID link vector fetch failed; retaining separate frames", exc_info=True
+                )
+        linked_items = collapse_occurrences(
+            linked_items,
+            collapse_window,
+            len(linked_items),
+            vectors=vectors,
+            identity_threshold=settings.reid_collapse_identity_threshold,
+        )
+        face_coverage = enrich_camera_link_face_evidence(
+            db,
+            settings,
+            crop,
+            linked_items,
+            query_crops=query_crops,
+            prepared_query=prepared_query,
+        )
     linked_items = _reject_attribute_conflicts(
         linked_items,
         settings,
@@ -834,6 +977,9 @@ def reid_camera_links(
             location_name=item.location_name,
             crop_id=item.crop_id,
             crop_url=item.crop_url,
+            person_id=item.person_id,
+            person_name=item.person_name,
+            person_is_vip=item.person_is_vip,
             score=item.score,
             stature_agreement=item.stature_agreement,
             attribute_agreement=item.attribute_agreement,
@@ -874,6 +1020,7 @@ def reid_camera_links(
         query_mode="tracklet" if len(query_crops) > 1 else "single_frame",
         query_frame_count=len(query_crops),
         face_coverage=face_coverage or ReidFaceCoverage(),
+        candidate_coverage=candidate_coverage,
     )
 
 

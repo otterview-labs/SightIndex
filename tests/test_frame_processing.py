@@ -246,7 +246,10 @@ def test_the_confidence_floor_drops_low_scoring_detections(tmp_path):
     from app.services.frame_processing import FrameProcessingService
 
     settings = Settings(data_dir=tmp_path, person_crop_min_confidence=0.70)
-    service = FrameProcessingService(db=None, settings=settings)
+    # This tests score filtering, not model loading: keep it runnable from a clean checkout.
+    service = FrameProcessingService(
+        db=None, settings=settings, detector=WholeFramePersonDetector()
+    )
     box = {"x": 0, "y": 0, "width": 200, "height": 400}
 
     kept = service.quality_filter_detections([
@@ -260,7 +263,9 @@ def test_the_confidence_floor_drops_low_scoring_detections(tmp_path):
 def test_crop_write_failure_cleans_only_files_from_this_attempt(monkeypatch, tmp_path):
     from unittest.mock import MagicMock
 
-    settings = Settings(data_dir=tmp_path, person_detector="whole_frame")
+    settings = Settings(
+        data_dir=tmp_path, person_detector="whole_frame", person_crop_require_whole_body=False
+    )
     settings.frames_dir.mkdir(parents=True)
     settings.crops_dir.mkdir(parents=True)
     settings.thumbnails_dir.mkdir(parents=True)
@@ -306,3 +311,87 @@ def test_crop_write_failure_cleans_only_files_from_this_attempt(monkeypatch, tmp
     assert image.thumbnail_url == "/data/thumbnails/original.jpg"
     db.rollback.assert_called_once()
     db.commit.assert_not_called()
+
+
+def test_a_box_touching_the_frame_edge_is_dropped_as_an_incomplete_body(tmp_path):
+    """A box that stops at the frame edge stops before the person does: its embedding,
+    attributes and stature would all measure an accidental crop rather than the person."""
+
+    from app.services.frame_processing import FrameProcessingService
+
+    settings = Settings(data_dir=tmp_path)
+    service = FrameProcessingService(
+        db=None, settings=settings, detector=WholeFramePersonDetector()
+    )
+    frame_width, frame_height = 1280, 720
+    whole = Detection(
+        bbox={"x": 100, "y": 100, "width": 200, "height": 400}, confidence=0.9
+    )
+    touches_left = Detection(
+        bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9
+    )
+    touches_bottom = Detection(
+        bbox={"x": 100, "y": frame_height - 400, "width": 200, "height": 400},
+        confidence=0.9,
+    )
+
+    kept = service.quality_filter_detections(
+        [whole, touches_left, touches_bottom], frame_width, frame_height
+    )
+
+    assert kept == [whole]
+
+
+def test_the_whole_body_check_is_skipped_without_a_frame_size(tmp_path):
+    """Callers that do not pass frame dimensions get the pre-existing behavior back, rather
+    than every detection being silently dropped."""
+
+    from app.services.frame_processing import FrameProcessingService
+
+    settings = Settings(data_dir=tmp_path)
+    service = FrameProcessingService(
+        db=None, settings=settings, detector=WholeFramePersonDetector()
+    )
+    touches_left = Detection(
+        bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9
+    )
+
+    kept = service.quality_filter_detections([touches_left])
+
+    assert kept == [touches_left]
+
+
+def test_a_whole_frame_box_is_not_treated_as_clipped(tmp_path):
+    """WholeFramePersonDetector claims the entire frame is the person before YOLO is connected;
+    that box necessarily touches all four edges and must not be rejected by the edge check."""
+
+    from app.services.frame_processing import FrameProcessingService
+
+    settings = Settings(data_dir=tmp_path)
+    service = FrameProcessingService(
+        db=None, settings=settings, detector=WholeFramePersonDetector()
+    )
+    frame_width, frame_height = 96, 96
+    whole_frame = Detection(
+        bbox={"x": 0, "y": 0, "width": frame_width, "height": frame_height}, confidence=1.0
+    )
+
+    kept = service.quality_filter_detections([whole_frame], frame_width, frame_height)
+
+    assert kept == [whole_frame]
+
+
+def test_the_whole_body_check_can_be_turned_off(tmp_path):
+    from app.services.frame_processing import FrameProcessingService
+
+    settings = Settings(data_dir=tmp_path, person_crop_require_whole_body=False)
+    service = FrameProcessingService(
+        db=None, settings=settings, detector=WholeFramePersonDetector()
+    )
+    touches_left = Detection(
+        bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9
+    )
+
+    kept = service.quality_filter_detections([touches_left], 1280, 720)
+
+    assert kept == [touches_left]

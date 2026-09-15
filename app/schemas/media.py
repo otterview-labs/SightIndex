@@ -86,6 +86,7 @@ class ObservationIndexItem(ORMModel):
     image_id: uuid.UUID | None = None
     person_id: uuid.UUID | None = None
     person_name: str | None = None
+    person_is_vip: bool = False
     employee_no: str | None = None
     department: str | None = None
     recognition_result_type: str | None = None

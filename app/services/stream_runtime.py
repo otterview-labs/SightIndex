@@ -203,7 +203,10 @@ class StreamRuntime:
                     frame_url, frame_path, captured_at = self._write_frame_file(stream, frame, cv2)
                     processor = FrameProcessingService(db, settings)
                     raw_detections = processor.detect_image_path(frame_path)
-                    detections = processor.quality_filter_detections(raw_detections)
+                    frame_height, frame_width = frame.shape[:2]
+                    detections = processor.quality_filter_detections(
+                        raw_detections, frame_width, frame_height
+                    )
                     if counting_line is not None:
                         crossings = []
                         tracks_before_crossing = {

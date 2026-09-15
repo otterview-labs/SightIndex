@@ -31,7 +31,10 @@ const sourceCrop = ref<PersonCropRead | null>(null);
 // Where else this person most likely went. Separate from the match list because it answers a
 // different question and is deliberately not threshold-gated.
 const cameraLinks = ref<ReidLinkResponse | null>(null);
-const showWeakCameraLinks = ref(false);
+// Defaults to visible: a link list is already per-camera and honestly labelled (score,
+// beats_chance, evidence_level), so hiding the weak ones by default just makes a camera with no
+// strong candidate look like it has no data at all.
+const showWeakCameraLinks = ref(true);
 const queryFile = ref<File | null>(null);
 const queryPreview = ref("");
 const results = ref<ReidMatchItem[] | null>(null);
@@ -97,6 +100,21 @@ const visibleCameraLinks = computed(() =>
     ? [...credibleCameraLinks.value, ...weakCameraLinks.value]
     : credibleCameraLinks.value,
 );
+
+const cameraPoolCoverageHint = computed(() => {
+  const coverage = cameraLinks.value?.candidate_coverage;
+  if (!coverage?.possibly_truncated) return "";
+  const indexed = coverage.indexed_camera_count ?? "未知";
+  const missing = coverage.sql_row_missing_count ?? 0;
+  const suffix = missing ? `，另有 ${missing} 条命中缺少 SQL crop 元数据` : "";
+  return `候选池达到单次上限 ${coverage.pool_limit} 条（当前汇总 ${coverage.raw_hit_count} 条），仅覆盖 ${coverage.hit_camera_count}/${indexed} 个其他摄像头，可能仍有摄像头未进入候选${suffix}。`;
+});
+
+const cameraMetadataHint = computed(() => {
+  const missing = cameraLinks.value?.candidate_coverage?.sql_row_missing_count ?? 0;
+  if (!missing || cameraLinks.value?.candidate_coverage?.possibly_truncated) return "";
+  return `候选池中有 ${missing} 条向量命中，但对应的 SQL crop 记录不存在；这属于索引一致性问题，不代表没有匹配。`;
+});
 
 const currentFeedbackCount = computed(() => Object.keys(feedbackByCandidate.value).length);
 
@@ -369,7 +387,7 @@ function onFileChange(file: File | null) {
   resultsFaceCoverage.value = null;
   resultsQueryCropId.value = null;
   cameraLinks.value = null;
-  showWeakCameraLinks.value = false;
+  showWeakCameraLinks.value = true;
   feedbackByCandidate.value = {};
   queryFrameCount.value = 1;
   // Removing an upload explicitly restores the stored crop, including its own links/feedback.
@@ -380,7 +398,7 @@ async function loadLinks(cropId: string) {
   const generation = queryGeneration;
   const sequence = ++linksSequence;
   cameraLinks.value = null;
-  showWeakCameraLinks.value = false;
+  showWeakCameraLinks.value = true;
   try {
     const response = await reidApi.links(cropId);
     if (!isCurrentQuery(cropId, generation) || sequence !== linksSequence) return;
@@ -439,7 +457,7 @@ async function activateSourceCrop(cropId: string | null) {
   resultsQueryCropId.value = null;
   queryFrameCount.value = 1;
   feedbackByCandidate.value = {};
-  showWeakCameraLinks.value = false;
+  showWeakCameraLinks.value = true;
   if (queryPreview.value) URL.revokeObjectURL(queryPreview.value);
   queryPreview.value = "";
   queryFile.value = null;
@@ -639,6 +657,12 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <ReidFaceCoverageSummary :coverage="cameraLinks.face_coverage" scope="links" />
+      <p v-if="cameraPoolCoverageHint" class="muted-text reid-pool-warning">
+        {{ cameraPoolCoverageHint }}
+      </p>
+      <p v-if="cameraMetadataHint" class="muted-text reid-pool-warning">
+        {{ cameraMetadataHint }}
+      </p>
       <EmptyState
         v-if="!credibleCameraLinks.length && !showWeakCameraLinks"
         class="reid-link-empty"

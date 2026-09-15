@@ -62,6 +62,8 @@ class ReidMatchItem(BaseModel):
     location_name: str | None = None
     person_id: uuid.UUID | None = None
     person_name: str | None = None
+    # None means no labelled person at all, distinct from a labelled-but-not-VIP False.
+    person_is_vip: bool | None = None
     # Where this body ranked in its own camera's crowd by height, and how closely that agrees
     # with the query. Reported so a cross-camera match can be read rather than just trusted.
     stature_percentile: int | None = None
@@ -146,6 +148,11 @@ class ReidCameraLink(BaseModel):
     location_name: str | None = None
     crop_id: uuid.UUID
     crop_url: str | None = None
+    # A manual label ("this crop is <person>"), not an identity confirmation: the console shows
+    # it as "needs verification", same as elsewhere a name accompanies a ReID score.
+    person_id: uuid.UUID | None = None
+    person_name: str | None = None
+    person_is_vip: bool | None = None
     # How closely this candidate's height rank matches the query's, 1 identical and 0 fifty
     # percentile points apart. None when either side's height could not be measured.
     stature_agreement: float | None = None
@@ -175,6 +182,26 @@ class ReidCameraLink(BaseModel):
     beats_chance: bool
 
 
+class ReidCandidatePoolCoverage(BaseModel):
+    """Observability for the global candidate pool used by camera links.
+
+    Milvus currently stores ReID vectors without camera metadata, so the link endpoint can only
+    ask for one global top-k pool and group the returned rows afterwards.  These counters expose
+    that boundary without pretending that every indexed camera was searched.  The indexed count
+    is the number of distinct cameras represented by current SQL ReID coverage markers; it is a
+    diagnostic, not a live Milvus consistency proof.
+    """
+
+    raw_hit_count: int = Field(default=0, ge=0)
+    hit_camera_count: int = Field(default=0, ge=0)
+    indexed_camera_count: int | None = Field(default=None, ge=0)
+    pool_limit: int = Field(default=0, ge=0)
+    # A Milvus hit can outlive its SQL crop row after cleanup or a partial rebuild.  Keep this
+    # explicit so callers do not mistake an unresolvable hit for a negative identity result.
+    sql_row_missing_count: int = Field(default=0, ge=0)
+    possibly_truncated: bool = False
+
+
 class ReidLinkResponse(BaseModel):
     crop_id: uuid.UUID
     camera_id: uuid.UUID | None = None
@@ -185,6 +212,7 @@ class ReidLinkResponse(BaseModel):
     query_mode: str = "single_frame"
     query_frame_count: int = 1
     face_coverage: ReidFaceCoverage = Field(default_factory=ReidFaceCoverage)
+    candidate_coverage: ReidCandidatePoolCoverage = Field(default_factory=ReidCandidatePoolCoverage)
 
 
 class ReidStatusResponse(BaseModel):

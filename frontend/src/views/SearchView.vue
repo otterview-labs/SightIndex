@@ -127,6 +127,9 @@ async function runSearch(text: string) {
     ? "按视觉语义相似度召回，结果需要人工核验"
     : "仅返回同时满足全部已解析标签和筛选条件的结果";
   try {
+    if (startTime.value && endTime.value && startTime.value > endTime.value) {
+      throw new Error("开始时间不能晚于结束时间");
+    }
     const payload = {
       query: trimmed,
       top_k: 20,

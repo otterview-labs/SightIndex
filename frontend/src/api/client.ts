@@ -12,6 +12,8 @@ import type {
   ObservationIndexResponse,
   Person,
   PersonCreate,
+  PersonUpdate,
+  PersonVisitStats,
   RequestBody,
   PersonCropRead,
   PersonTrajectoryResponse,
@@ -103,9 +105,10 @@ export const search = {
     api<SemanticSearchResponse>("/api/search/semantic/person-crops", jsonBody(payload)),
   personCrops: (payload: RequestBody<VisualSearchRequest, "query">) =>
     api<SearchResponse>("/api/search/person-crops", jsonBody(payload)),
-  observations: (params: URLSearchParams) =>
+  observations: (params: URLSearchParams, signal?: AbortSignal) =>
     api<ObservationIndexResponse>(
       `/api/search/observations?${params.toString()}`,
+      { signal },
     ),
   rebuildObservations: (limit = 500) =>
     api<IndexRebuildResponse>(
@@ -137,6 +140,13 @@ export const persons = {
     api<Person[]>(`/api/persons${queryString({ limit })}`),
   create: (payload: RequestBody<PersonCreate, "name">) =>
     api<Person>("/api/persons", jsonBody(payload)),
+  setVip: (personId: string, isVip: boolean) =>
+    api<Person>(`/api/persons/${personId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_vip: isVip } satisfies PersonUpdate),
+    }),
+  visitStats: (personId: string) =>
+    api<PersonVisitStats>(`/api/persons/${personId}/visit-stats`),
   faces: (personId: string) =>
     api<FaceEmbeddingRead[]>(`/api/persons/${personId}/faces`),
   addFace: (personId: string, body: FormData) =>
@@ -186,6 +196,11 @@ export const face = {
     api<FaceDiagnosticResponse>(
       `/api/face/diagnostics/recent${queryString({ limit })}`,
     ),
+  diagnosticsForCrops: (cropIds: string[], signal?: AbortSignal) =>
+    api<FaceDiagnosticResponse>("/api/face/diagnostics/crops", {
+      ...jsonBody({ crop_ids: cropIds }),
+      signal,
+    }),
   rebuildRecognition: (limit = 1000) =>
     api<FaceRecognitionRebuildResponse>(
       `/api/face/index/rebuild${queryString({ limit })}`,

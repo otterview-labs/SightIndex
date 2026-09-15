@@ -74,13 +74,13 @@ const queryFace = computed(() => props.coverage?.query_face_found === true ? "�
       <details>
         <summary>查看人脸诊断</summary>
         <dl>
-          <dt>查询侧</dt><dd>{{ queryFace }}；尝试 {{ count(coverage.query_attempted_count) }} 帧<template v-if="measured(coverage.query_face_quality)">；质量评分 {{ coverage.query_face_quality.toFixed(2) }}</template></dd>
-          <dt>候选侧</dt><dd>尝试 {{ count(coverage.candidate_attempted_count) }} 帧；其中 {{ count(coverage.borrowed_candidate_count) }} 个候选使用补充帧人脸</dd>
+          <dt>查询侧</dt><dd>{{ queryFace }}；累计尝试 {{ count(coverage.query_attempted_count) }} 次<template v-if="measured(coverage.query_face_quality)">；质量评分 {{ coverage.query_face_quality.toFixed(2) }}</template></dd>
+          <dt>候选侧</dt><dd>累计尝试 {{ count(coverage.candidate_attempted_count) }} 次；其中 {{ count(coverage.borrowed_candidate_count) }} 个候选使用补充帧人脸</dd>
           <dt>明确证据</dt><dd>支持匹配 {{ count(coverage.hard_match_count) }} 个；明确冲突 {{ count(coverage.hard_conflict_count) }} 个（不是人工确认）</dd>
           <template v-if="queryReasons.length"><dt>查询侧弃权原因</dt><dd>{{ queryReasons.join("；") }}</dd></template>
           <template v-if="candidateReasons.length"><dt>候选侧弃权原因</dt><dd>{{ candidateReasons.join("；") }}</dd></template>
         </dl>
-        <p class="reid-face-coverage-note">统计针对人脸候选池，不等于下方最终显示数量；尝试帧数可能包含同次出现的补充帧。没有比较不代表人脸冲突。</p>
+        <p class="reid-face-coverage-note">统计针对人脸候选池，不等于下方最终显示数量；累计尝试包含缓存复用、补位轮次和补充帧，不是独立图片数或 GPU 推理次数。没有比较不代表人脸冲突。</p>
       </details>
     </template>
   </div>

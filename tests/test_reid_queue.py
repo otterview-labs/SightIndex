@@ -3,6 +3,7 @@
 import importlib
 import sys
 import threading
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from test_api_smoke import _sample_image_bytes
@@ -311,6 +312,63 @@ def test_backfill_does_not_mark_partial_failed_batch_as_indexed(monkeypatch, tmp
     assert result["indexed"] == 16
     assert result["unprocessed"] == 2
     assert len(markers) == 16
+
+
+def test_reid_backfill_drains_oldest_pending_rows_first(monkeypatch, tmp_path):
+    """The durable marker-backed page must not let a live stream starve old crops."""
+
+    main = load_app(
+        monkeypatch,
+        tmp_path,
+        "test-reid-backfill-oldest-first",
+        REID_ENABLED="true",
+        REID_SERVICE_URL="http://reid.local",
+        MILVUS_ENABLED="true",
+        EMBEDDING_PROVIDER="none",
+        VISUAL_EMBEDDING_PROVIDER="none",
+    )
+
+    from app.config.settings import get_settings
+    from app.db.session import SessionLocal
+    from app.models.media import Image, PersonCrop
+    from app.models.vectors import VLEmbedding
+    from app.services.reid_index import REID_OBJECT_TYPE, ReidIndexService
+
+    with TestClient(main.create_app()):
+        pass
+
+    settings = get_settings()
+    base_time = datetime(2026, 1, 1, tzinfo=UTC)
+    with SessionLocal() as db:
+        image = Image(image_url="/data/frames/order.jpg", source_type="stream_frame")
+        db.add(image)
+        db.flush()
+        crops = [
+            PersonCrop(
+                image_id=image.id,
+                crop_url=f"/data/crops/order-{index}.jpg",
+                bbox={"label": "person"},
+                created_at=base_time + timedelta(seconds=index),
+            )
+            for index in range(3)
+        ]
+        db.add_all(crops)
+        db.flush()
+        service = ReidIndexService(db, settings)
+        # The newest crop is already covered and must not affect the oldest-first page.
+        db.add(
+            VLEmbedding(
+                object_type=REID_OBJECT_TYPE,
+                object_id=crops[-1].id,
+                embedding_model=service.fingerprint,
+                embedding_dim=settings.reid_embedding_dim,
+            )
+        )
+        db.commit()
+
+        pending = list(db.scalars(service._unindexed_query(2)))
+
+    assert [crop.id for crop in pending] == [crops[0].id, crops[1].id]
 
 
 def test_concurrent_backfills_keep_one_marker_and_observation(monkeypatch, tmp_path):

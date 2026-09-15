@@ -14,6 +14,7 @@ from app.schemas.attributes import (
     StructuredAnalyzeResponse,
 )
 from app.services.appearance_attributes import AppearanceAttributeService
+from app.services.attribute_backfill import DurableAttributeBackfillService
 from app.services.observation_index import ObservationIndexService
 from app.services.stature import StatureService
 from app.services.structured_attributes import StructuredAttributeService
@@ -135,10 +136,12 @@ def backfill_clothing_tone(
     limit: int = Query(default=500, ge=1, le=5000),
     force: bool = Query(default=False),
 ) -> dict[str, object]:
-    """Reads clothing tone off crops that have no attributes yet.
+    """Read clothing tone with the durable keyset walker used by VLM backfill.
 
-    Skips anything a VLM already described, unless forced: this reader knows brightness and
-    little else, and replacing a real description with it would be a downgrade.
+    The endpoint keeps its historical one-batch response and ``force`` semantics, but no longer
+    loads an unbounded, newest-first query.  Existing VLM descriptions are visited and counted as
+    skipped unless ``force=true``; this preserves the old response fields while the checkpoint
+    lets repeated calls make progress through a large history.
     """
 
     service = AppearanceAttributeService(
@@ -148,21 +151,20 @@ def backfill_clothing_tone(
     )
     stature_service = StatureService(db, settings)
     observations = ObservationIndexService(db, settings)
-    crops = list(
-        db.scalars(select(PersonCrop).order_by(PersonCrop.captured_at.desc()).limit(limit))
-    )
-    seen = updated = skipped = unreadable = 0
-    for crop in crops:
-        seen += 1
+
+    def process(crop: PersonCrop) -> str:
         existing = crop.attributes or {}
-        if existing and existing.get("source") != "cv_tone" and not force:
-            skipped += 1
-            continue
+        if (
+            isinstance(existing, dict)
+            and existing
+            and existing.get("source") != "cv_tone"
+            and not force
+        ):
+            return "skipped"
         path = _crop_path(settings, crop)
         attributes = service.describe(path) if path else None
         if attributes is None:
-            unreadable += 1
-            continue
+            return "unreadable"
         stature = stature_service.describe(crop.bbox, crop.camera_id)
         if stature:
             attributes["stature"] = stature
@@ -170,14 +172,29 @@ def backfill_clothing_tone(
         db.add(crop)
         db.flush()
         observations.upsert_crop(crop)
-        updated += 1
-    db.commit()
+        return "updated"
+
+    durable = DurableAttributeBackfillService(
+        db,
+        settings,
+        state_path=settings.data_dir
+        / "tasks"
+        / ("tone-backfill-force.json" if force else "tone-backfill.json"),
+    )
+    before = durable.load_progress()
+    progress = durable.run(
+        batch_size=limit,
+        force=force,
+        processor=process,
+        include_described=True,
+        max_items=limit,
+    )
     return {
         "requested": limit,
-        "seen": seen,
-        "updated": updated,
-        "skipped_described": skipped,
-        "unreadable": unreadable,
+        "seen": progress.attempted - before.attempted,
+        "updated": progress.updated - before.updated,
+        "skipped_described": progress.skipped - before.skipped,
+        "unreadable": progress.unreadable - before.unreadable,
     }
 
 
@@ -196,8 +213,32 @@ def backfill_person_crop_attributes(
     limit: int = Query(default=50, ge=1, le=5000),
     force: bool = Query(default=False),
 ) -> dict[str, object]:
-    seen, updated, errors = StructuredAttributeService(
+    """Compatibility HTTP entry point backed by the durable VLM walker.
+
+    Keep the historical response shape for callers, but use the same bounded keyset/checkpoint
+    implementation as the worker.  Repeating the request resumes from the normal
+    ``data/tasks/attribute-backfill.json`` checkpoint (or the separate
+    ``attribute-backfill-force.json`` checkpoint for ``force=true``) instead of scanning the
+    whole crop table again.
+    """
+
+    durable = DurableAttributeBackfillService(
         db,
         settings,
-    ).analyze_unparsed_person_crops(limit, force=force)
-    return {"requested": limit, "force": force, "seen": seen, "updated": updated, "errors": errors}
+        state_path=settings.data_dir
+        / "tasks"
+        / ("attribute-backfill-force.json" if force else "attribute-backfill.json"),
+    )
+    before = durable.load_progress()
+    progress = durable.run(
+        batch_size=limit,
+        force=force,
+        max_items=limit,
+    )
+    return {
+        "requested": limit,
+        "force": force,
+        "seen": progress.attempted - before.attempted,
+        "updated": progress.updated - before.updated,
+        "errors": progress.last_errors,
+    }

@@ -369,8 +369,17 @@ class FrameProcessingService:
     def detect_image_path(self, image_path: Path) -> list[Detection]:
         return self.detector.detect(image_path)
 
-    def quality_filter_detections(self, detections: list[Detection]) -> list[Detection]:
-        return [detection for detection in detections if self._is_quality_detection(detection)]
+    def quality_filter_detections(
+        self,
+        detections: list[Detection],
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> list[Detection]:
+        return [
+            detection
+            for detection in detections
+            if self._is_quality_detection(detection, frame_width, frame_height)
+        ]
 
     def process_image(
         self,
@@ -407,14 +416,16 @@ class FrameProcessingService:
             raw_detections = (
                 detections if detections is not None else self.detector.detect(image_path)
             )
-            image_detections = self.quality_filter_detections(raw_detections)
+            frame_width, frame_height = self._read_image_size(image.image_url)
+            image_detections = self.quality_filter_detections(
+                raw_detections, frame_width, frame_height
+            )
             if image_detections:
                 annotated_url = self._create_annotated_frame_file(image_path, image_detections)
                 if annotated_url:
                     image.thumbnail_url = annotated_url
                     self.db.add(image)
 
-            frame_width, frame_height = self._read_image_size(image.image_url)
             for detection in image_detections:
                 crop_url = self._create_crop_file(image_path, detection)
                 created_crop_urls.append(crop_url)
@@ -580,7 +591,12 @@ class FrameProcessingService:
         crop = self._enhance_crop(cv2, crop)
         return self._write_jpeg(cv2, target, crop, self.settings.person_crop_jpeg_quality)
 
-    def _is_quality_detection(self, detection: Detection) -> bool:
+    def _is_quality_detection(
+        self,
+        detection: Detection,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> bool:
         bbox = detection.bbox
         width = int(bbox.get("width", 0) or 0)
         height = int(bbox.get("height", 0) or 0)
@@ -590,7 +606,42 @@ class FrameProcessingService:
             return False
         if height < self.settings.person_crop_min_bbox_height:
             return False
+        if (
+            self.settings.person_crop_require_whole_body
+            and frame_width
+            and frame_height
+            and self._touches_frame_edge(bbox, width, height, frame_width, frame_height)
+        ):
+            return False
         return True
+
+    def _touches_frame_edge(
+        self,
+        bbox: dict[str, Any],
+        width: int,
+        height: int,
+        frame_width: int,
+        frame_height: int,
+    ) -> bool:
+        margin = self.settings.person_crop_edge_margin
+        x = float(bbox.get("x", 0) or 0)
+        y = float(bbox.get("y", 0) or 0)
+        # A box spanning the whole frame is WholeFramePersonDetector's "no real localization"
+        # placeholder, not a person walking out of frame: judging it against the edges would
+        # reject every detection it ever produces.
+        if (
+            x <= margin
+            and y <= margin
+            and width >= frame_width - margin
+            and height >= frame_height - margin
+        ):
+            return False
+        return (
+            x <= margin
+            or y <= margin
+            or x + width >= frame_width - margin
+            or y + height >= frame_height - margin
+        )
 
     def _enhance_crop(self, cv2: Any, crop: Any) -> Any:
         height, width = crop.shape[:2]

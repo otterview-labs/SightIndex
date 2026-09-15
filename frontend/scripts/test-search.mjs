@@ -100,6 +100,17 @@ test("strict label mode never calls vector retrieval", async context => {
   assert.match(state.hint.value, /结构化标签/);
 });
 
+test("an inverted time range is rejected before any search request", async context => {
+  const { state, calls } = await mountView(context);
+  state.startTime.value = "2026-09-15T10:00";
+  state.endTime.value = "2026-09-15T09:00";
+  await state.runSearch("背包");
+  assert.equal(calls.semantic.length, 0);
+  assert.equal(calls.structured.length, 0);
+  assert.equal(state.status.value, "error");
+  assert.match(state.hint.value, /开始时间/);
+});
+
 test("service failure clears recent results and is not a no-match state", async context => {
   const { state, calls } = await mountView(context, {
     semanticPersonCrops: async () => { throw new Error("语义检索服务暂不可用"); },

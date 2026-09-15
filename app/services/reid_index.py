@@ -14,7 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
-from app.models.media import PersonCrop
+from app.models.media import Image, PersonCrop
 from app.models.vectors import VectorIndexCapacityLock, VLEmbedding
 from app.schemas.reid import ReidMatchItem
 from app.services.observation_index import ObservationIndexService
@@ -345,7 +345,15 @@ class ReidIndexService:
             raise RuntimeError("ReID marker lock is missing; run init_db()")
 
     def backfill(self, limit: int) -> dict[str, object]:
-        """Indexes the most recent crops without a ReID vector for the current model."""
+        """Index the oldest pending crops for the current model in a bounded page.
+
+        The SQL marker is the durable cursor: once a crop is successfully flushed to Milvus,
+        ``record_indexed_crop`` makes it disappear from the pending query.  Ordering by the
+        composite ``(created_at, id)`` key gives the page keyset semantics without keeping a
+        process-local offset, so repeated calls resume safely after a restart and newly arriving
+        crops cannot starve an older backlog.  Keep this method bounded; the API invokes it as a
+        short rebuild step rather than as one unbounded job.
+        """
 
         crops = list(self.db.scalars(self._unindexed_query(limit)))
         indexed = 0
@@ -406,6 +414,32 @@ class ReidIndexService:
             or 0
         )
 
+    def indexed_camera_count(self, *, exclude_camera_id: uuid.UUID | None = None) -> int:
+        """Count cameras represented by current ReID coverage markers.
+
+        Camera metadata is not part of the current Milvus schema.  The API therefore uses this
+        SQL-side count only to explain whether a global top-k pool may have omitted a camera; it
+        must never be used as proof that every marker still exists in Milvus.  Camera metadata is
+        resolved the same way as the observation index (crop camera, then source image camera).
+        The optional exclusion keeps the query camera out of the cross-camera denominator.
+        """
+
+        camera_id = func.coalesce(PersonCrop.camera_id, Image.camera_id)
+        query = (
+            select(func.count(func.distinct(camera_id)))
+            .join(VLEmbedding, VLEmbedding.object_id == PersonCrop.id)
+            .join(Image, Image.id == PersonCrop.image_id)
+            .where(
+                VLEmbedding.object_type == REID_OBJECT_TYPE,
+                VLEmbedding.embedding_model == self.fingerprint,
+                VLEmbedding.embedding_dim == self.settings.reid_embedding_dim,
+                camera_id.is_not(None),
+            )
+        )
+        if exclude_camera_id is not None:
+            query = query.where(camera_id != exclude_camera_id)
+        return int(self.db.scalar(query) or 0)
+
     def candidate_pool_limit(self) -> int:
         return max(
             COLLAPSE_CANDIDATE_LIMIT,
@@ -424,7 +458,10 @@ class ReidIndexService:
             select(PersonCrop)
             .where(PersonCrop.crop_url.is_not(None))
             .where(PersonCrop.id.not_in(indexed))
-            .order_by(PersonCrop.created_at.desc())
+            # The marker-backed pending set is the durable cursor.  Ascending order drains the
+            # historical backlog first; id is a deterministic tie-breaker for batches created in
+            # the same timestamp tick and prevents offset-style skips between calls.
+            .order_by(PersonCrop.created_at.asc(), PersonCrop.id.asc())
         )
         return query.limit(limit) if limit is not None else query
 

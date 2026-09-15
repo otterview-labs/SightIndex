@@ -36,6 +36,24 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        /** Update Person */
+        patch: operations["update_person_api_persons__person_id__patch"];
+        trace?: never;
+    };
+    "/api/persons/{person_id}/visit-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Person Visit Stats */
+        get: operations["get_person_visit_stats_api_persons__person_id__visit_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -512,6 +530,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/face/diagnostics/crops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Diagnose Face Crops */
+        post: operations["diagnose_face_crops_api_face_diagnostics_crops_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/face/index/rebuild": {
         parameters: {
             query?: never;
@@ -769,10 +804,12 @@ export interface paths {
         put?: never;
         /**
          * Backfill Clothing Tone
-         * @description Reads clothing tone off crops that have no attributes yet.
+         * @description Read clothing tone with the durable keyset walker used by VLM backfill.
          *
-         *     Skips anything a VLM already described, unless forced: this reader knows brightness and
-         *     little else, and replacing a real description with it would be a downgrade.
+         *     The endpoint keeps its historical one-batch response and ``force`` semantics, but no longer
+         *     loads an unbounded, newest-first query.  Existing VLM descriptions are visited and counted as
+         *     skipped unless ``force=true``; this preserves the old response fields while the checkpoint
+         *     lets repeated calls make progress through a large history.
          */
         post: operations["backfill_clothing_tone_api_attributes_person_crops_tone_backfill_post"];
         delete?: never;
@@ -790,7 +827,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Backfill Person Crop Attributes */
+        /**
+         * Backfill Person Crop Attributes
+         * @description Compatibility HTTP entry point backed by the durable VLM walker.
+         *
+         *     Keep the historical response shape for callers, but use the same bounded keyset/checkpoint
+         *     implementation as the worker.  Repeating the request resumes from the normal
+         *     ``data/tasks/attribute-backfill.json`` checkpoint (or the separate
+         *     ``attribute-backfill-force.json`` checkpoint for ``force=true``) instead of scanning the
+         *     whole crop table again.
+         */
         post: operations["backfill_person_crop_attributes_api_attributes_person_crops_backfill_post"];
         delete?: never;
         options?: never;
@@ -866,6 +912,40 @@ export interface paths {
          * @description Parse one person or vehicle image into normalized JSON attributes using the configured OpenAI-compatible VLM. This endpoint returns attributes only: it does not write `person_crops.attributes` and does not update indexes. Use `/api/attributes/person-crops/{crop_id}/analyze` for parse-and-persist workflows. When `VLM_SERVICE_API_KEY` is set, pass it as `Authorization: Bearer ...` or `X-API-Key`; `VLM_API_KEY` is reserved for calling the upstream VLM.
          */
         post: operations["create_structured_analysis_api_vlm_structured_analysis_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/search/semantic/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Semantic Search Status */
+        get: operations["semantic_search_status_api_search_semantic_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/search/semantic/person-crops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Semantic Search Person Crops */
+        post: operations["semantic_search_person_crops_api_search_semantic_person_crops_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1347,6 +1427,11 @@ export interface components {
              */
             can_enroll: boolean;
         };
+        /** FaceDiagnosticRequest */
+        FaceDiagnosticRequest: {
+            /** Crop Ids */
+            crop_ids: string[];
+        };
         /** FaceDiagnosticResponse */
         FaceDiagnosticResponse: {
             /** Threshold */
@@ -1661,6 +1746,11 @@ export interface components {
             person_id?: string | null;
             /** Person Name */
             person_name?: string | null;
+            /**
+             * Person Is Vip
+             * @default false
+             */
+            person_is_vip: boolean;
             /** Employee No */
             employee_no?: string | null;
             /** Department */
@@ -1878,6 +1968,8 @@ export interface components {
             avatar_url: string | null;
             /** Status */
             status: string;
+            /** Is Vip */
+            is_vip: boolean;
             /**
              * Created At
              * Format: date-time
@@ -1952,6 +2044,33 @@ export interface components {
              */
             warnings: string[];
         };
+        /** PersonUpdate */
+        PersonUpdate: {
+            /** Is Vip */
+            is_vip: boolean;
+        };
+        /** PersonVisitStats */
+        PersonVisitStats: {
+            /**
+             * Person Id
+             * Format: uuid
+             */
+            person_id: string;
+            /** Total Appearances */
+            total_appearances: number;
+            /** First Seen */
+            first_seen?: string | null;
+            /** Last Seen */
+            last_seen?: string | null;
+            /** Window Days */
+            window_days: number;
+            /** Visit Days In Window */
+            visit_days_in_window: number;
+            /** Repeat Visitor Threshold Days */
+            repeat_visitor_threshold_days: number;
+            /** Is Repeat Visitor */
+            is_repeat_visitor: boolean;
+        };
         /** RecognitionEventRead */
         RecognitionEventRead: {
             /**
@@ -2014,6 +2133,12 @@ export interface components {
             crop_id: string;
             /** Crop Url */
             crop_url?: string | null;
+            /** Person Id */
+            person_id?: string | null;
+            /** Person Name */
+            person_name?: string | null;
+            /** Person Is Vip */
+            person_is_vip?: boolean | null;
             /** Stature Agreement */
             stature_agreement?: number | null;
             /** Attribute Agreement */
@@ -2069,6 +2194,45 @@ export interface components {
             captured_at?: string | null;
             /** Beats Chance */
             beats_chance: boolean;
+        };
+        /**
+         * ReidCandidatePoolCoverage
+         * @description Observability for the global candidate pool used by camera links.
+         *
+         *     Milvus currently stores ReID vectors without camera metadata, so the link endpoint can only
+         *     ask for one global top-k pool and group the returned rows afterwards.  These counters expose
+         *     that boundary without pretending that every indexed camera was searched.  The indexed count
+         *     is the number of distinct cameras represented by current SQL ReID coverage markers; it is a
+         *     diagnostic, not a live Milvus consistency proof.
+         */
+        ReidCandidatePoolCoverage: {
+            /**
+             * Raw Hit Count
+             * @default 0
+             */
+            raw_hit_count: number;
+            /**
+             * Hit Camera Count
+             * @default 0
+             */
+            hit_camera_count: number;
+            /** Indexed Camera Count */
+            indexed_camera_count?: number | null;
+            /**
+             * Pool Limit
+             * @default 0
+             */
+            pool_limit: number;
+            /**
+             * Sql Row Missing Count
+             * @default 0
+             */
+            sql_row_missing_count: number;
+            /**
+             * Possibly Truncated
+             * @default false
+             */
+            possibly_truncated: boolean;
         };
         /**
          * ReidFaceCoverage
@@ -2274,6 +2438,7 @@ export interface components {
              */
             query_frame_count: number;
             face_coverage?: components["schemas"]["ReidFaceCoverage"];
+            candidate_coverage?: components["schemas"]["ReidCandidatePoolCoverage"];
         };
         /** ReidMatchItem */
         ReidMatchItem: {
@@ -2304,6 +2469,8 @@ export interface components {
             person_id?: string | null;
             /** Person Name */
             person_name?: string | null;
+            /** Person Is Vip */
+            person_is_vip?: boolean | null;
             /** Stature Percentile */
             stature_percentile?: number | null;
             /** Stature Agreement */
@@ -2651,6 +2818,124 @@ export interface components {
             labels_en?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** SemanticSearchItem */
+        SemanticSearchItem: {
+            /** Crop Id */
+            crop_id?: string | null;
+            /** Image Id */
+            image_id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+            /** Crop Url */
+            crop_url?: string | null;
+            /** Score */
+            score: number;
+            /** Original Score */
+            original_score?: number | null;
+            /** Embedding Rerank Score */
+            embedding_rerank_score?: number | null;
+            /** Rerank Score */
+            rerank_score?: number | null;
+            /** Rerank Reason */
+            rerank_reason?: string | null;
+            /** Captured At */
+            captured_at?: string | null;
+            /** Location Id */
+            location_id?: string | null;
+            /** Location Name */
+            location_name?: string | null;
+            /** Camera Id */
+            camera_id?: string | null;
+            /** Camera Name */
+            camera_name?: string | null;
+            /** Person Id */
+            person_id?: string | null;
+            /** Person Name */
+            person_name?: string | null;
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Labels Zh */
+            labels_zh?: {
+                [key: string]: unknown;
+            } | null;
+            /** Labels En */
+            labels_en?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Match Type
+             * @default semantic_candidate
+             * @constant
+             */
+            match_type: "semantic_candidate";
+            /** Duplicate Crop Ids */
+            duplicate_crop_ids?: string[];
+        };
+        /** SemanticSearchRequest */
+        SemanticSearchRequest: {
+            /** Query */
+            query: string;
+            /**
+             * Top K
+             * @default 20
+             */
+            top_k: number;
+            filters?: components["schemas"]["SearchFilters"];
+        };
+        /** SemanticSearchResponse */
+        SemanticSearchResponse: {
+            /**
+             * Mode
+             * @default semantic
+             * @constant
+             */
+            mode: "semantic";
+            /** Items */
+            items: components["schemas"]["SemanticSearchItem"][];
+            /** Model */
+            model: string;
+            /** Min Score */
+            min_score: number;
+            /** Notice */
+            notice: string;
+            /** Scope Crops */
+            scope_crops: number;
+            /** Indexed Scope Crops */
+            indexed_scope_crops: number;
+            /**
+             * Candidates Examined
+             * @default 0
+             */
+            candidates_examined: number;
+            /**
+             * Shortlist Limited
+             * @default false
+             */
+            shortlist_limited: boolean;
+        };
+        /** SemanticSearchStatus */
+        SemanticSearchStatus: {
+            /** Enabled */
+            enabled: boolean;
+            /** Configured */
+            configured: boolean;
+            /** Model */
+            model: string;
+            /** Min Score */
+            min_score: number;
+            /** Total Crops */
+            total_crops: number;
+            /** Indexed Crops */
+            indexed_crops: number;
+            /** Labeled Crops */
+            labeled_crops: number;
+            /** Attributes Enabled */
+            attributes_enabled: boolean;
+            /** Auto Index On Ingest */
+            auto_index_on_ingest: boolean;
         };
         /** StreamActionResponse */
         StreamActionResponse: {
@@ -3138,6 +3423,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PersonRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_person_api_persons__person_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_person_visit_stats_api_persons__person_id__visit_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonVisitStats"];
                 };
             };
             /** @description Validation Error */
@@ -4165,6 +4516,39 @@ export interface operations {
             };
         };
     };
+    diagnose_face_crops_api_face_diagnostics_crops_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FaceDiagnosticRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FaceDiagnosticResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     rebuild_face_recognition_index_api_face_index_rebuild_post: {
         parameters: {
             query?: {
@@ -4870,6 +5254,59 @@ export interface operations {
                      *     }
                      */
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    semantic_search_status_api_search_semantic_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SemanticSearchStatus"];
+                };
+            };
+        };
+    };
+    semantic_search_person_crops_api_search_semantic_person_crops_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SemanticSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SemanticSearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

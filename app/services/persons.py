@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings, get_settings
@@ -17,12 +17,12 @@ from app.models.media import Image, PersonCrop, PersonObservationIndex, VideoStr
 from app.models.persons import Person
 from app.models.vectors import FaceEmbedding
 from app.schemas.events import PersonTrajectoryPoint
-from app.schemas.persons import PersonCreate
+from app.schemas.persons import PersonCreate, PersonVisitStats
 from app.services.embeddings import EmbeddingRuntimeError
 from app.services.observation_index import ObservationIndexService
 from app.services.reid import ReidRuntimeError
 from app.services.reid_index import ReidIndexService
-from app.services.time_utils import database_datetime
+from app.services.time_utils import database_datetime, local_now
 from app.services.vector_index import MilvusVectorIndex, VectorIndexError
 
 TrajectoryMode = Literal["all", "face", "vector", "reid"]
@@ -74,6 +74,21 @@ class PersonService:
     def get(self, person_id: uuid.UUID) -> Person | None:
         return self.db.get(Person, person_id)
 
+    def set_vip(self, person: Person, is_vip: bool) -> Person:
+        person.is_vip = is_vip
+        self.db.add(person)
+        # Observation rows carry their own denormalized copy of the flag (same reason
+        # person_name is denormalized there), so a toggle must re-stamp every existing row for
+        # this person rather than waiting for each crop to be re-indexed.
+        self.db.execute(
+            update(PersonObservationIndex)
+            .where(PersonObservationIndex.person_id == person.id)
+            .values(person_is_vip=is_vip)
+        )
+        self.db.commit()
+        self.db.refresh(person)
+        return person
+
     def label_crop(self, person: Person, crop: PersonCrop) -> PersonCrop:
         """Names the body in a crop, without going through a face.
 
@@ -110,6 +125,44 @@ class PersonService:
         self.db.commit()
         self.db.refresh(crop)
         return crop
+
+    def visit_stats(self, person_id: uuid.UUID) -> PersonVisitStats:
+        """Repeat-visit standing for an already-labelled person, never an inferred stranger.
+
+        Scoped deliberately to people who were manually named: nothing here clusters unlabelled
+        crops into a guessed identity, so it carries none of that risk.
+        """
+
+        captured_ats = [
+            value
+            for value in self.db.scalars(
+                select(PersonObservationIndex.captured_at).where(
+                    PersonObservationIndex.person_id == person_id,
+                    PersonObservationIndex.captured_at.is_not(None),
+                )
+            )
+            if value is not None
+        ]
+
+        window_days = self.settings.repeat_visitor_window_days
+        threshold_days = self.settings.repeat_visitor_min_days
+        window_start = self._database_time_boundary(
+            local_now(self.settings) - timedelta(days=window_days)
+        )
+        visit_days_in_window = len(
+            {value.date() for value in captured_ats if value >= window_start}
+        )
+
+        return PersonVisitStats(
+            person_id=person_id,
+            total_appearances=len(captured_ats),
+            first_seen=min(captured_ats) if captured_ats else None,
+            last_seen=max(captured_ats) if captured_ats else None,
+            window_days=window_days,
+            visit_days_in_window=visit_days_in_window,
+            repeat_visitor_threshold_days=threshold_days,
+            is_repeat_visitor=visit_days_in_window >= threshold_days,
+        )
 
     def labelled_crops(self, person_id: uuid.UUID, limit: int) -> list[PersonCrop]:
         """The crops seeding this person's ReID gallery, newest first."""

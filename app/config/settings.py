@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # two of them matched at 0.710 across cameras -- higher than any pair of actual people, and
     # they surfaced as the top result. 37% of a day's crops sat under 0.70 here.
     person_crop_min_confidence: float = Field(default=0.70, ge=0.0, le=1.0)
+    # A box touching the frame edge stops before the person does, so its embedding, attributes
+    # and stature are all measuring an accidental crop rather than the person. Reusing stature.py's
+    # edge margin instead of inventing a second definition of "whole person".
+    person_crop_require_whole_body: bool = True
+    person_crop_edge_margin: int = Field(default=6, ge=0)
     # Doorway cameras often devote most pixels to the room rather than the person. Store a
     # display-friendly crop while keeping the scale bounded: this cannot invent detail, but
     # Lanczos resampling plus edge-aware sharpening makes the detail the camera did capture much
@@ -153,6 +158,7 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "qwen3-embedding:4b"
     visual_embedding_provider: str = "none"
     visual_embedding_model: str = "sentence-transformers/clip-ViT-B-32"
+    visual_embedding_text_model: str | None = None
     visual_embedding_dim: int = Field(default=512, ge=1)
     visual_embedding_device: str | None = None
     visual_embedding_instruction: str = "Retrieve images that match the user query."
@@ -310,6 +316,11 @@ class Settings(BaseSettings):
     reid_query_tracklet_window_seconds: float = Field(default=30.0, ge=0.0, le=300.0)
     reid_query_tracklet_identity_threshold: float = Field(default=0.78, ge=0.0, le=1.0)
     reid_query_tracklet_candidate_limit: int = Field(default=80, ge=1, le=500)
+    # A labelled person counts as a repeat visitor once they were seen on at least this many
+    # distinct calendar days within the trailing window below. Only scoped to already-named
+    # people: nothing here clusters unlabelled crops into an inferred identity.
+    repeat_visitor_window_days: int = Field(default=30, ge=1, le=365)
+    repeat_visitor_min_days: int = Field(default=3, ge=1, le=100)
     embedding_rerank_weight: float = Field(default=0.35, ge=0.0, le=1.0)
     vlm_rerank_weight: float = Field(default=0.65, ge=0.0, le=1.0)
     vlm_structured_prompt: str = (

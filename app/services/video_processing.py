@@ -202,8 +202,9 @@ class VideoProcessingService:
                     captured_at=self._frame_captured_at(capture, cv2, base_captured_at),
                 )
                 active_frame_path = frame_file.path
+                frame_height, frame_width = frame.shape[:2]
                 detections = self.processor.quality_filter_detections(
-                    self.processor.detect_image_path(frame_file.path)
+                    self.processor.detect_image_path(frame_file.path), frame_width, frame_height
                 )
                 if counting_line is not None:
                     crossings, next_track_id = self._line_crossings(

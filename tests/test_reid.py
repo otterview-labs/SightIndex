@@ -626,6 +626,144 @@ def test_matches_are_placed_even_before_the_observation_row_lands(
     assert items[0]["first_seen"].startswith("2026-08-24T11:04:00")
 
 
+def test_a_label_survives_the_observation_row_lag(monkeypatch, tmp_path):
+    """A crop labelled seconds ago must not lose its name just because ingest has not yet
+    written the observation row cache (see test_matches_are_placed_even_before... above)."""
+
+    main = load_app(
+        monkeypatch,
+        tmp_path,
+        "test-reid-label-lag",
+        REID_ENABLED="true",
+        REID_SERVICE_URL="http://reid.local",
+        MILVUS_ENABLED="true",
+    )
+
+    from app.db.session import SessionLocal
+    from app.models.media import Image, PersonCrop, PersonObservationIndex, VideoStream
+    from app.models.persons import Person
+    from app.services.reid import ReidEmbeddingService
+    from app.services.vector_index import MilvusVectorIndex, VectorSearchHit
+
+    camera_id = uuid.uuid4()
+    crop_id_holder: dict[str, uuid.UUID] = {}
+
+    monkeypatch.setattr(MilvusVectorIndex, "is_enabled", lambda self: True)
+    monkeypatch.setattr(ReidEmbeddingService, "embed_image", lambda self, path: [0.1] * self.dim)
+    monkeypatch.setattr(
+        MilvusVectorIndex,
+        "search_vector",
+        lambda self, object_type, vector, top_k: [
+            VectorSearchHit(object_id=crop_id_holder["crop"], score=0.9)
+        ],
+    )
+
+    with TestClient(main.create_app()) as client:
+        with SessionLocal() as db:
+            db.add(VideoStream(name="项目部门口", stream_url="rtsp://x", camera_id=camera_id))
+            image = Image(image_url="/data/frames/f.jpg", source_type="stream_frame")
+            db.add(image)
+            person = Person(name="王五")
+            db.add(person)
+            db.commit()
+            db.refresh(image)
+            db.refresh(person)
+            person_id = person.id
+            crop = PersonCrop(
+                image_id=image.id,
+                crop_url="/data/crops/labelled.jpg",
+                bbox={"label": "person"},
+                camera_id=camera_id,
+                captured_at=datetime(2026, 8, 24, 12, 0, 0),
+                person_id=person_id,
+            )
+            db.add(crop)
+            db.commit()
+            db.refresh(crop)
+            crop_id_holder["crop"] = crop.id
+            # Deliberately no upsert_crop call: the label exists, the observation cache does not.
+            assert db.query(PersonObservationIndex).count() == 0
+
+        response = client.post(
+            "/api/reid/search",
+            files={"file": ("query.jpg", b"bytes", "image/jpeg")},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["person_id"] == str(person_id)
+    assert items[0]["person_name"] == "王五"
+    assert items[0]["person_is_vip"] is False
+
+
+def test_a_vip_label_also_survives_the_observation_row_lag(monkeypatch, tmp_path):
+    """The VIP flag is denormalized the same way the name is, so it needs the same lag guard."""
+
+    main = load_app(
+        monkeypatch,
+        tmp_path,
+        "test-reid-vip-label-lag",
+        REID_ENABLED="true",
+        REID_SERVICE_URL="http://reid.local",
+        MILVUS_ENABLED="true",
+    )
+
+    from app.db.session import SessionLocal
+    from app.models.media import Image, PersonCrop, PersonObservationIndex, VideoStream
+    from app.models.persons import Person
+    from app.services.reid import ReidEmbeddingService
+    from app.services.vector_index import MilvusVectorIndex, VectorSearchHit
+
+    camera_id = uuid.uuid4()
+    crop_id_holder: dict[str, uuid.UUID] = {}
+
+    monkeypatch.setattr(MilvusVectorIndex, "is_enabled", lambda self: True)
+    monkeypatch.setattr(ReidEmbeddingService, "embed_image", lambda self, path: [0.1] * self.dim)
+    monkeypatch.setattr(
+        MilvusVectorIndex,
+        "search_vector",
+        lambda self, object_type, vector, top_k: [
+            VectorSearchHit(object_id=crop_id_holder["crop"], score=0.9)
+        ],
+    )
+
+    with TestClient(main.create_app()) as client:
+        with SessionLocal() as db:
+            db.add(VideoStream(name="项目部门口", stream_url="rtsp://x", camera_id=camera_id))
+            image = Image(image_url="/data/frames/f.jpg", source_type="stream_frame")
+            db.add(image)
+            person = Person(name="赵六", is_vip=True)
+            db.add(person)
+            db.commit()
+            db.refresh(image)
+            db.refresh(person)
+            person_id = person.id
+            crop = PersonCrop(
+                image_id=image.id,
+                crop_url="/data/crops/vip-labelled.jpg",
+                bbox={"label": "person"},
+                camera_id=camera_id,
+                captured_at=datetime(2026, 8, 24, 12, 0, 0),
+                person_id=person_id,
+            )
+            db.add(crop)
+            db.commit()
+            db.refresh(crop)
+            crop_id_holder["crop"] = crop.id
+            assert db.query(PersonObservationIndex).count() == 0
+
+        response = client.post(
+            "/api/reid/search",
+            files={"file": ("query.jpg", b"bytes", "image/jpeg")},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert items[0]["person_id"] == str(person_id)
+    assert items[0]["person_is_vip"] is True
+
+
 def test_query_tracklet_keeps_only_nearby_identity_consistent_frames(monkeypatch, tmp_path):
     load_app(
         monkeypatch,

@@ -58,6 +58,8 @@ export type ObservationIndexResponse = Schemas["ObservationIndexResponse"];
 
 export type Person = Schemas["PersonRead"];
 export type PersonCreate = Schemas["PersonCreate"];
+export type PersonUpdate = Schemas["PersonUpdate"];
+export type PersonVisitStats = Schemas["PersonVisitStats"];
 export type FaceEmbeddingRead = Schemas["FaceEmbeddingRead"];
 export type FaceMatchItem = Schemas["FaceMatchItem"];
 export type FaceRecognitionResponse = Schemas["FaceRecognitionResponse"];

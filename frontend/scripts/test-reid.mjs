@@ -267,7 +267,7 @@ test("query-face absence does not imply all candidates were tried or faceless", 
   assert.match(html, /本次查询未提取到可用人脸，使用人体与标签证据/);
   assert.match(html, /不代表候选图片都没有人脸/);
   assert.match(html, /0 \/ 12 个入选候选/);
-  assert.match(html, /尝试 0 帧/);
+  assert.match(html, /累计尝试 0 次/);
   assert.match(html, /检测／提取阶段没有可用人脸候选 ×4/);
   assert.match(html, /原图读取失败 ×1/);
   assert.doesNotMatch(html, /12 张图片没有人脸|质量评分 0\.00/);
@@ -283,7 +283,8 @@ test("face comparison denominator is shortlist visits, not attempted frames or d
   assert.match(html, /跨摄像头线索的人脸参与/);
   assert.match(html, /5 \/ 12 个入选候选（最终筛选前）/);
   assert.doesNotMatch(html, /5 \/ 30|42%|人脸命中率/);
-  assert.match(html, /尝试 30 帧/);
+  assert.match(html, /累计尝试 30 次/);
+  assert.match(html, /不是独立图片数或 GPU 推理次数/);
   assert.match(html, /质量评分 0\.00/);
   assert.match(html, /支持匹配 0 个/);
   assert.match(html, /不等于下方最终显示数量/);
@@ -337,6 +338,26 @@ test("search and link coverage stay separate and an old server clears prior cove
   await state.searchByCrop("crop-A");
   assert.equal(state.resultsFaceCoverage.value, null);
   assert.equal(state.cameraLinks.value.face_coverage.status, "query_unavailable");
+});
+
+test("a possibly truncated global pool is explained without claiming no match", async (t) => {
+  const state = await view(t);
+  state.cameraLinks.value = {
+    links: [],
+    candidate_coverage: {
+      raw_hit_count: 5000,
+      hit_camera_count: 2,
+      indexed_camera_count: 6,
+      pool_limit: 5000,
+      sql_row_missing_count: 2,
+      possibly_truncated: true,
+    },
+  };
+  assert.match(state.cameraPoolCoverageHint.value, /达到单次上限 5000 条（当前汇总 5000 条）/);
+  assert.match(state.cameraPoolCoverageHint.value, /仅覆盖 2\/6 个其他摄像头/);
+  assert.match(state.cameraPoolCoverageHint.value, /可能仍有摄像头未进入候选/);
+  state.cameraLinks.value = { links: [] };
+  assert.equal(state.cameraPoolCoverageHint.value, "");
 });
 
 test("new searches clear diagnostics immediately and errors do not restore them", async (t) => {

@@ -8,7 +8,14 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `${response.status} ${response.statusText}`);
+    let message = text || `${response.status} ${response.statusText}`;
+    try {
+      const payload = JSON.parse(text);
+      if (typeof payload.detail === "string") message = payload.detail;
+    } catch {
+      message = text || message;
+    }
+    throw new Error(message);
   }
   return (await response.json()) as T;
 }

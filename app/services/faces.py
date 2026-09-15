@@ -368,19 +368,14 @@ class FaceRecognitionService:
         degrade to body and attribute evidence instead of treating "no face" as a mismatch.
         """
 
-        self._begin_face_comparison()
-        query_face = self._comparison_candidate(query, min_quality=min_quality, query=True)
-        verified = (
-            query_face is not None
-            and query_face.quality_score >= self.settings.reid_face_strong_reliability
-        )
-        self._set_query_face(query_face, verified=verified)
+        query_face = self.prepare_person_crop_query([query], min_quality=min_quality, anchor=query)
         if query_face is None:
-            self._commit_crop_face_cache()
             return {}
         compared = self._compare_face_to_crops(query_face, candidates, min_quality=min_quality)
         return {
-            crop_id: replace(comparison, query_identity_verified=verified)
+            crop_id: replace(
+                comparison, query_identity_verified=self.coverage.query_identity_verified
+            )
             for crop_id, comparison in compared.items()
         }
 
@@ -397,6 +392,30 @@ class FaceRecognitionService:
         Body-similar neighbours can be different people. An available anchor face therefore
         gates replacements by face similarity. When the anchor is missing or weak, a borrowed
         face remains a bounded soft signal and cannot rescue or hard-reject an identity.
+        """
+
+        query_face = self.prepare_person_crop_query(queries, min_quality=min_quality, anchor=anchor)
+        if query_face is None:
+            return {}
+        compared = self._compare_face_to_crops(query_face, candidates, min_quality=min_quality)
+        return {
+            crop_id: replace(
+                comparison, query_identity_verified=self.coverage.query_identity_verified
+            )
+            for crop_id, comparison in compared.items()
+        }
+
+    def prepare_person_crop_query(
+        self,
+        queries: list[PersonCrop],
+        *,
+        min_quality: float,
+        anchor: PersonCrop | None = None,
+    ) -> FaceCandidate | None:
+        """Prepare query evidence without loading or checking any candidate person.
+
+        Keep the same anchor gate used by gallery comparisons: a borrowed query face without a
+        reliable anchor remains soft evidence. Coverage describes query work only at this point.
         """
 
         self._begin_face_comparison()
@@ -436,10 +455,23 @@ class FaceRecognitionService:
         self._set_query_face(best, verified=identity_verified)
         if best is None:
             self._commit_crop_face_cache()
-            return {}
-        compared = self._compare_face_to_crops(best, candidates, min_quality=min_quality)
+        return best
+
+    def compare_prepared_person_crops(
+        self,
+        query_face: FaceCandidate,
+        candidates: list[PersonCrop],
+        *,
+        min_quality: float,
+        query_identity_verified: bool,
+    ) -> dict[uuid.UUID, FaceCropComparison]:
+        """Compare another candidate batch while reusing the request's prepared query face."""
+
+        self._begin_face_comparison()
+        self._set_query_face(query_face, verified=query_identity_verified)
+        compared = self._compare_face_to_crops(query_face, candidates, min_quality=min_quality)
         return {
-            crop_id: replace(comparison, query_identity_verified=identity_verified)
+            crop_id: replace(comparison, query_identity_verified=query_identity_verified)
             for crop_id, comparison in compared.items()
         }
 
@@ -1069,9 +1101,26 @@ class FaceRecognitionService:
             .order_by(PersonCrop.created_at.desc())
             .limit(limit)
         )
+        return self._diagnose_crops(list(self.db.execute(stmt)))
+
+    def diagnose_crops(self, crop_ids: list[uuid.UUID]) -> list[dict[str, object]]:
+        if not 1 <= len(crop_ids) <= 100:
+            raise ValueError("每次诊断需提供 1 至 100 个裁剪 ID")
+        requested = list(dict.fromkeys(crop_ids))
+        statement = (
+            select(PersonCrop, Image)
+            .join(Image, PersonCrop.image_id == Image.id)
+            .where(PersonCrop.id.in_(requested))
+        )
+        rows = {crop.id: (crop, image) for crop, image in self.db.execute(statement)}
+        return self._diagnose_crops([rows[crop_id] for crop_id in requested if crop_id in rows])
+
+    def _diagnose_crops(
+        self, rows: list[tuple[PersonCrop, Image]]
+    ) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         threshold = self._threshold(None)
-        for crop, image in list(self.db.execute(stmt)):
+        for crop, image in rows:
             existing_event = self.db.scalar(
                 select(RecognitionEvent)
                 .where(RecognitionEvent.crop_id == crop.id)

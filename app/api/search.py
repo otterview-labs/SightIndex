@@ -51,7 +51,10 @@ def search_images(
     settings: AppSettings,
 ) -> SearchResponse:
     payload.target = "image"
-    return VisualSearchService(db, settings).search(payload)
+    try:
+        return VisualSearchService(db, settings).search(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/person-crops", response_model=SearchResponse)
@@ -61,7 +64,10 @@ def search_person_crops(
     settings: AppSettings,
 ) -> SearchResponse:
     payload.target = "person_crop"
-    return VisualSearchService(db, settings).search(payload)
+    try:
+        return VisualSearchService(db, settings).search(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/index/rebuild", response_model=IndexRebuildResponse)
@@ -111,16 +117,19 @@ def list_observations(
         start_time=start_time,
         end_time=end_time,
     )
-    rows, total = ObservationIndexService(db, settings).list_rows(
-        limit=limit,
-        offset=offset,
-        query=query,
-        filters=filters,
-        only_named=only_named,
-        only_face_vector=only_face_vector,
-        only_vl_vector=only_vl_vector,
-        only_labeled=only_labeled,
-    )
+    try:
+        rows, total = ObservationIndexService(db, settings).list_rows(
+            limit=limit,
+            offset=offset,
+            query=query,
+            filters=filters,
+            only_named=only_named,
+            only_face_vector=only_face_vector,
+            only_vl_vector=only_vl_vector,
+            only_labeled=only_labeled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ObservationIndexResponse(
         items=[ObservationIndexItem.model_validate(row, from_attributes=True) for row in rows],
         total=total,

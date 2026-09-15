@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
 import { face as faceApi, persons as personsApi, search as searchApi } from "@/api/client";
@@ -40,6 +40,7 @@ const { persons, activePersonId, activePersonName, refresh: refreshPersons } = u
 
 const items = ref<ObservationIndexItem[]>([]);
 const diagnostics = ref(new Map<string, FaceDiagnosticItem>());
+const diagnosticsStatus = ref("");
 const total = ref(0);
 const offset = ref(0);
 const limit = ref(100);
@@ -76,25 +77,46 @@ function buildParams(): URLSearchParams {
   return params;
 }
 
-async function loadDiagnostics() {
+let loadSequence = 0;
+let loadController: AbortController | null = null;
+
+async function loadDiagnostics(cropIds: string[], sequence: number, signal: AbortSignal) {
+  diagnosticsStatus.value = cropIds.length ? "人脸诊断加载中" : "";
   try {
-    const result = await faceApi.diagnostics(100);
-    diagnostics.value = new Map(
-      (result.items ?? []).map((item) => [String(item.crop_id), item] as const),
-    );
+    for (let start = 0; start < cropIds.length; start += 100) {
+      if (sequence !== loadSequence || signal.aborted) return;
+      const result = await faceApi.diagnosticsForCrops(cropIds.slice(start, start + 100), signal);
+      if (sequence !== loadSequence || signal.aborted) return;
+      diagnostics.value = new Map([
+        ...diagnostics.value,
+        ...(result.items ?? []).map((item) => [String(item.crop_id), item] as const),
+      ]);
+      diagnosticsStatus.value = `人脸诊断 ${diagnostics.value.size}/${cropIds.length}`;
+    }
   } catch (error) {
+    if (sequence !== loadSequence || signal.aborted) return;
     console.warn("observation diagnostics unavailable", error);
-    diagnostics.value = new Map();
+    diagnosticsStatus.value = "人脸诊断暂不可用，表格查询不受影响";
   }
 }
 
 async function load(resetOffset = false) {
+  if (startTime.value && endTime.value && startTime.value > endTime.value) {
+    showError(new Error("开始时间不能晚于结束时间"));
+    return;
+  }
+  const sequence = ++loadSequence;
+  loadController?.abort();
+  const controller = new AbortController();
+  loadController = controller;
   if (resetOffset) offset.value = 0;
   loading.value = true;
   status.value = "加载中";
+  diagnostics.value = new Map();
+  diagnosticsStatus.value = "";
   try {
-    const data = await searchApi.observations(buildParams());
-    await loadDiagnostics();
+    const data = await searchApi.observations(buildParams(), controller.signal);
+    if (sequence !== loadSequence || controller.signal.aborted) return;
     offset.value = data.offset ?? 0;
     limit.value = data.limit ?? limit.value;
     total.value = data.total ?? 0;
@@ -102,13 +124,22 @@ async function load(resetOffset = false) {
     const start = total.value ? offset.value + 1 : 0;
     const end = Math.min(offset.value + items.value.length, total.value);
     status.value = `${start}-${end} / ${total.value}`;
+    void loadDiagnostics(items.value.map((item) => String(item.crop_id)), sequence, controller.signal);
   } catch (error) {
+    if (sequence !== loadSequence || controller.signal.aborted) return;
     status.value = "加载失败";
+    items.value = [];
+    total.value = 0;
     showError(error);
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
+
+onBeforeUnmount(() => {
+  loadSequence++;
+  loadController?.abort();
+});
 
 function diagnosticFor(item: ObservationIndexItem) {
   return diagnostics.value.get(String(item.crop_id));
@@ -379,6 +410,9 @@ onMounted(async () => {
             {{ rebuilding ? "重建中" : "重建最近 500" }}
           </button>
           <div class="table-status">{{ status }}</div>
+          <div class="table-status" role="status" aria-label="人脸诊断状态">
+            {{ diagnosticsStatus }}
+          </div>
         </div>
       </div>
 
@@ -462,7 +496,10 @@ onMounted(async () => {
                      believe a row was written before the moment it records. -->
               </td>
               <td>
-                <div class="table-main">{{ personParts(item)[0] || "未知" }}</div>
+                <div class="table-main">
+                  {{ personParts(item)[0] || "未知" }}
+                  <span v-if="item.person_is_vip" class="badge vip-badge">VIP</span>
+                </div>
                 <div class="table-sub">{{ personParts(item).slice(1).join(" / ") || "-" }}</div>
                 <div class="badge-row">
                   <span v-if="item.recognition_result_type">

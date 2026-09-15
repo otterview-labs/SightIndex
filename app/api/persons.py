@@ -13,6 +13,8 @@ from app.schemas.persons import (
     PersonCreate,
     PersonRead,
     PersonTrajectoryResponse,
+    PersonUpdate,
+    PersonVisitStats,
 )
 from app.services.faces import FaceRecognitionService
 from app.services.persons import PersonService
@@ -41,6 +43,27 @@ def get_person(person_id: uuid.UUID, db: DBSession) -> PersonRead:
     if person is None:
         raise HTTPException(status_code=404, detail="Person not found")
     return person
+
+
+@router.patch("/{person_id}", response_model=PersonRead)
+def update_person(payload: PersonUpdate, person_id: uuid.UUID, db: DBSession) -> PersonRead:
+    service = PersonService(db)
+    person = service.get(person_id)
+    if person is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return service.set_vip(person, payload.is_vip)
+
+
+@router.get("/{person_id}/visit-stats", response_model=PersonVisitStats)
+def get_person_visit_stats(
+    person_id: uuid.UUID,
+    db: DBSession,
+    settings: AppSettings,
+) -> PersonVisitStats:
+    service = PersonService(db, settings)
+    if service.get(person_id) is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return service.visit_stats(person_id)
 
 
 @router.post("/{person_id}/faces", response_model=FaceEmbeddingRead)

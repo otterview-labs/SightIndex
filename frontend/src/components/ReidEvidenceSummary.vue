@@ -6,6 +6,7 @@ interface ReidEvidence {
   crop_id: string;
   score: number;
   person_name?: string | null;
+  person_is_vip?: boolean | null;
   face_similarity?: number | null;
   face_reliability?: number | null;
   face_match?: boolean | null;
@@ -112,7 +113,11 @@ const faceText = computed(() => {
           <dt>融合分</dt><dd>{{ score(item.fusion_score) }}，非概率；可靠人脸结论优先于数值分</dd>
         </template>
         <template v-if="item.person_name">
-          <dt>关联姓名</dt><dd>{{ item.person_name }}（需核对身份）</dd>
+          <dt>关联姓名</dt>
+          <dd>
+            {{ item.person_name }}（需核对身份）
+            <span v-if="item.person_is_vip" class="badge vip-badge">VIP</span>
+          </dd>
         </template>
         <dt>裁剪</dt><dd class="reid-evidence-id">{{ item.crop_id }}</dd>
       </dl>

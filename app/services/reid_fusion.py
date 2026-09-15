@@ -1,6 +1,7 @@
 import logging
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import select
@@ -9,9 +10,148 @@ from sqlalchemy.orm import Session
 from app.config.settings import Settings
 from app.models.media import PersonCrop
 from app.schemas.reid import ReidFaceCoverage, ReidMatchItem
-from app.services.faces import FaceRecognitionService, face_extraction_errors, face_runtime_status
+from app.services.faces import (
+    FaceCandidate,
+    FaceRecognitionService,
+    face_extraction_errors,
+    face_runtime_status,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedReidFaceQuery:
+    service: FaceRecognitionService | None
+    face: FaceCandidate | None
+    coverage: ReidFaceCoverage
+
+
+def prepare_camera_link_face_query(
+    db: Session,
+    settings: Settings,
+    query_crop: PersonCrop,
+    *,
+    has_candidates: bool,
+    query_crops: list[PersonCrop] | None = None,
+) -> PreparedReidFaceQuery:
+    """Decide whether candidate face work is possible before fetching candidate body vectors."""
+
+    coverage = ReidFaceCoverage()
+    if not settings.reid_face_priority_enabled:
+        coverage.status = "disabled"
+        return PreparedReidFaceQuery(None, None, coverage)
+    if not has_candidates:
+        return PreparedReidFaceQuery(None, None, coverage)
+    if not face_runtime_status(settings).ready:
+        coverage.status = "unavailable"
+        return PreparedReidFaceQuery(None, None, coverage)
+    service = None
+    try:
+        service = FaceRecognitionService(db, settings)
+        face = service.prepare_person_crop_query(
+            query_crops or [query_crop],
+            min_quality=settings.reid_face_min_quality,
+            anchor=query_crop,
+        )
+        return PreparedReidFaceQuery(service, face, service.coverage.model_copy(deep=True))
+    except face_extraction_errors():
+        logger.warning("ReID link query face preparation failed", exc_info=True)
+        if service is not None:
+            coverage = service.coverage.model_copy(deep=True)
+        coverage.status = "error"
+        return PreparedReidFaceQuery(None, None, coverage)
+
+
+def enrich_camera_link_face_evidence(
+    db: Session,
+    settings: Settings,
+    query_crop: PersonCrop,
+    items: list[ReidMatchItem],
+    *,
+    query_crops: list[PersonCrop] | None = None,
+    prepared_query: PreparedReidFaceQuery | None = None,
+) -> ReidFaceCoverage:
+    """Spend one request's face budget on distinct visits, refilling camera slots in rounds.
+
+    The caller supplies identity-checked occurrences. Once a camera has a reliable face match,
+    its remaining visits no longer consume checks needed by another camera. Rejected, absent and
+    uncertain faces leave the next visit eligible, but never enlarge the configured total budget.
+    Borrowed member frames also spend this budget. The query is prepared once and reused across
+    all comparison rounds; its diagnostics are counted once before candidate work starts.
+    """
+
+    prepared_query = prepared_query or prepare_camera_link_face_query(
+        db, settings, query_crop, has_candidates=bool(items), query_crops=query_crops
+    )
+    coverage = prepared_query.coverage.model_copy(deep=True)
+    if prepared_query.face is None:
+        return coverage
+    pending = list({item.crop_id: item for item in items}.values())
+    remaining = settings.reid_face_candidate_limit
+    while pending and remaining > 0:
+        # One visit per camera in each round, so failed visits can be replaced while the total
+        # work stays bounded. A runtime/query failure ends all rounds instead of retrying it.
+        batch = _camera_balanced_shortlist(
+            pending,
+            min(remaining, len({item.camera_id for item in pending})),
+        )
+        round_coverage = enrich_face_evidence(
+            db,
+            settings,
+            query_crop,
+            batch,
+            query_crops=query_crops,
+            candidate_attempt_limit=remaining,
+            prepared_query=prepared_query,
+        )
+        if round_coverage.candidate_absence_reasons.get("inference_error"):
+            # Individual extraction failures are reported as abstentions by the face service.
+            # Do not amplify a failing runtime through every remaining refill round.
+            round_coverage.status = "error"
+        _accumulate_face_coverage(coverage, round_coverage)
+        # Missing SQL rows still spend shortlist slots; successfully loaded visits can also
+        # spend attempts on member frames. Both must fit within this same request budget.
+        remaining -= max(len(batch), round_coverage.candidate_attempted_count)
+        if round_coverage.status in {"disabled", "unavailable", "query_unavailable", "error"}:
+            break
+        checked = {item.crop_id for item in batch}
+        matched_cameras = {item.camera_id for item in batch if item.face_match is True}
+        pending = [
+            item
+            for item in pending
+            if item.crop_id not in checked and item.camera_id not in matched_cameras
+        ]
+    return coverage
+
+
+def _accumulate_face_coverage(total: ReidFaceCoverage, batch: ReidFaceCoverage) -> None:
+    """Combine actual per-round work without losing earlier comparisons or absence reasons."""
+
+    for name in (
+        "query_attempted_count",
+        "candidate_attempted_count",
+        "shortlist_count",
+        "compared_count",
+        "borrowed_candidate_count",
+        "hard_match_count",
+        "hard_conflict_count",
+    ):
+        setattr(total, name, getattr(total, name) + getattr(batch, name))
+    total.query_face_found |= batch.query_face_found
+    total.query_identity_verified |= batch.query_identity_verified
+    if batch.query_face_quality is not None:
+        total.query_face_quality = max(total.query_face_quality or 0.0, batch.query_face_quality)
+    for name in ("query_absence_reasons", "candidate_absence_reasons"):
+        reasons = getattr(total, name)
+        for reason, count in getattr(batch, name).items():
+            reasons[reason] = reasons.get(reason, 0) + count
+    if batch.status in {"disabled", "unavailable", "query_unavailable", "error"}:
+        total.status = batch.status
+    elif total.compared_count:
+        total.status = "compared"
+    else:
+        total.status = batch.status
 
 
 def enrich_face_evidence(
@@ -23,6 +163,8 @@ def enrich_face_evidence(
     query_image_path: Path | None = None,
     query_crops: list[PersonCrop] | None = None,
     coverage: ReidFaceCoverage | None = None,
+    candidate_attempt_limit: int | None = None,
+    prepared_query: PreparedReidFaceQuery | None = None,
 ) -> ReidFaceCoverage:
     """Annotate a camera-balanced shortlist with optional face evidence in place."""
 
@@ -39,12 +181,14 @@ def enrich_face_evidence(
 
     shortlist = _camera_balanced_shortlist(
         items,
-        settings.reid_face_candidate_limit,
+        settings.reid_face_candidate_limit
+        if candidate_attempt_limit is None
+        else max(0, min(settings.reid_face_candidate_limit, candidate_attempt_limit)),
     )
     coverage.shortlist_count = len(shortlist)
     if not shortlist:
         return coverage
-    if not face_runtime_status(settings).ready:
+    if prepared_query is None and not face_runtime_status(settings).ready:
         coverage.status = "unavailable"
         return coverage
     member_ids: dict[uuid.UUID, list[uuid.UUID]] = {}
@@ -58,6 +202,13 @@ def enrich_face_evidence(
             for item in shortlist
             if item.camera_id is not None
         }
+    if candidate_attempt_limit is not None:
+        # Representatives are always considered once. Allocate only the remaining attempts to
+        # their optional member frames, so a refill round cannot multiply its GPU work by three.
+        member_budget = max(0, candidate_attempt_limit - len(shortlist))
+        for crop_id, members in member_ids.items():
+            member_ids[crop_id] = members[:member_budget]
+            member_budget -= len(member_ids[crop_id])
     crop_ids = {item.crop_id for item in shortlist}
     crop_ids.update(member for members in member_ids.values() for member in members)
     crops = {
@@ -69,7 +220,13 @@ def enrich_face_evidence(
         coverage.candidate_absence_reasons["candidate_row_missing"] = len(shortlist)
         return coverage
     try:
-        face_service = FaceRecognitionService(db, settings)
+        face_service = (
+            prepared_query.service
+            if prepared_query is not None
+            else FaceRecognitionService(db, settings)
+        )
+        assert face_service is not None
+        face_service.candidate_occurrences = {}
         for item in shortlist:
             representative = crops.get(item.crop_id)
             if representative is None or representative.camera_id != item.camera_id:
@@ -84,7 +241,15 @@ def enrich_face_evidence(
                 and abs((crops[member].captured_at - representative.captured_at).total_seconds())
                 <= settings.reid_collapse_window_seconds
             ]
-        if query_crops and len(query_crops) > 1:
+        if prepared_query is not None:
+            assert prepared_query.face is not None
+            evidence = face_service.compare_prepared_person_crops(
+                prepared_query.face,
+                ordered_crops,
+                min_quality=settings.reid_face_min_quality,
+                query_identity_verified=prepared_query.coverage.query_identity_verified,
+            )
+        elif query_crops and len(query_crops) > 1:
             evidence = face_service.compare_person_crop_gallery(
                 query_crops,
                 ordered_crops,

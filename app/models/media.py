@@ -76,6 +76,9 @@ class PersonObservationIndex(Base):
         GUID(), ForeignKey("persons.id"), nullable=True
     )
     person_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Denormalized from Person.is_vip the same way person_name is, so a search row never needs a
+    # join just to show the tag. set_vip() re-stamps existing rows when the flag changes.
+    person_is_vip: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     employee_no: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     department: Mapped[str | None] = mapped_column(String, nullable=True)
     recognition_result_type: Mapped[str | None] = mapped_column(String, nullable=True, index=True)

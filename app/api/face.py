@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.api.deps import AppSettings, DBSession
 from app.schemas.persons import (
+    FaceDiagnosticRequest,
     FaceDiagnosticResponse,
     FaceLibraryRebuildResponse,
     FaceRecognitionRebuildResponse,
@@ -69,6 +70,16 @@ def diagnose_recent_face_crops(
     return FaceDiagnosticResponse(
         threshold=settings.face_match_threshold,
         items=service.diagnose_recent_crops(limit=limit),
+    )
+
+
+@router.post("/diagnostics/crops", response_model=FaceDiagnosticResponse)
+def diagnose_face_crops(
+    payload: FaceDiagnosticRequest, db: DBSession, settings: AppSettings
+) -> FaceDiagnosticResponse:
+    return FaceDiagnosticResponse(
+        threshold=settings.face_match_threshold,
+        items=FaceRecognitionService(db, settings).diagnose_crops(payload.crop_ids),
     )
 
 

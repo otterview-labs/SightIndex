@@ -1,3 +1,5 @@
+import re
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,7 @@ from app.schemas.media import (
 from app.services.embeddings import EmbeddingRuntimeError
 from app.services.observation_index import ObservationIndexService, ObservationSearchHit
 from app.services.rerank import EmbeddingRerankService, VLMRerankService
+from app.services.time_utils import database_search_filters
 from app.services.vector_index import MilvusVectorIndex, VectorIndexError, VectorSearchHit
 from app.services.vlm import VLMRuntimeError
 
@@ -49,6 +52,11 @@ class VisualSearchService:
         self.vector_index = MilvusVectorIndex(self.settings)
 
     def search(self, payload: VisualSearchRequest) -> SearchResponse:
+        payload = payload.model_copy(update={
+            "filters": database_search_filters(
+                payload.filters, self.settings, self.db.get_bind().dialect.name
+            ),
+        })
         if payload.target == "image":
             return SearchResponse(items=[])
         return self._search_person_crops(payload)
@@ -60,19 +68,22 @@ class VisualSearchService:
 
     def _search_person_crops(self, payload: VisualSearchRequest) -> SearchResponse:
         requested_top_k = payload.top_k
+        persons = self._query_known_persons(payload.query)
         structured_result, conditions = StructuredSearchService(self.db, self.settings).search(
             payload.query,
             top_k=requested_top_k,
             filters=payload.filters,
+            person_ids=[person.id for person in persons] if persons else None,
         )
-        person_result = self._search_person_crops_by_known_person(payload)
-        if person_result is not None:
-            return SearchResponse(items=person_result.items[:requested_top_k])
 
         # Parsed label queries are strict AND matches. Do not mix in observation
         # keyword hits because they can satisfy only part of a multi-label query.
         if conditions:
             return SearchResponse(items=structured_result.items[:requested_top_k])
+
+        person_result = self._search_person_crops_by_known_person(payload)
+        if person_result is not None:
+            return SearchResponse(items=person_result.items[:requested_top_k])
 
         observation_items = [
             self._search_item_from_observation(hit)
@@ -584,12 +595,17 @@ class StructuredSearchService:
         query: str,
         top_k: int = 8,
         filters: SearchFilters | None = None,
+        person_ids: list[uuid.UUID] | None = None,
     ) -> tuple[SearchResponse, list[StructuredCondition]]:
         conditions = self.parse_query(query)
         if not conditions:
             return SearchResponse(items=[]), []
-        filters = filters or SearchFilters()
+        filters = database_search_filters(
+            filters or SearchFilters(), self.settings, self.db.get_bind().dialect.name
+        )
         stmt = select(PersonCrop).order_by(PersonCrop.created_at.desc(), PersonCrop.id.desc())
+        if person_ids is not None:
+            stmt = stmt.where(PersonCrop.person_id.in_(person_ids))
         if filters.person_id:
             stmt = stmt.where(PersonCrop.person_id == filters.person_id)
         if filters.camera_id:
@@ -670,20 +686,8 @@ class StructuredSearchService:
         elif any(token in normalized for token in ("长发", "long hair", "long_hair")):
             conditions.append(StructuredCondition("hair", ("long_hair",)))
 
-        if any(token in normalized for token in ("戴帽", "帽子", "hat", "cap")):
-            conditions.append(StructuredCondition("hat", (True,)))
-        if any(token in normalized for token in ("眼镜", "glasses")):
-            conditions.append(StructuredCondition("glasses", (True,)))
-        if any(token in normalized for token in ("背包", "书包", "双肩包", "backpack", "bag")):
-            conditions.append(StructuredCondition("backpack", (True,)))
-        if any(token in normalized for token in ("手机", "打电话", "看手机", "玩手机", "phone")):
-            conditions.append(StructuredCondition("holding_phone", (True,)))
-        if any(token in normalized for token in ("抽烟", "吸烟", "smoking", "smoke")):
-            conditions.append(StructuredCondition("smoking", (True,)))
-        if any(token in normalized for token in ("跌倒", "摔倒", "倒地", "fall", "fallen")):
-            conditions.append(StructuredCondition("falling", (True,)))
-        if any(token in normalized for token in ("打架", "斗殴", "互殴", "fight", "fighting")):
-            conditions.append(StructuredCondition("fighting", (True,)))
+        boolean_conditions, residual = self._boolean_conditions(normalized)
+        conditions.extend(boolean_conditions)
 
         color = self._query_upper_color(normalized)
         if color:
@@ -699,7 +703,50 @@ class StructuredSearchService:
         stature = self._query_stature(normalized)
         if stature:
             conditions.append(StructuredCondition("stature", (stature,)))
+        if conditions and re.search(
+            r"不|没|未|无|未知|不确定|\b(?:no|not|without)\b",
+            residual.replace("没有头发", ""),
+        ):
+            raise ValueError("该否定或未知条件暂不支持，请使用明确的标签条件，不会忽略条件继续检索")
+        if conditions and re.search(r"或者|或是|或|\bor\b", normalized):
+            raise ValueError("暂不支持“或”条件，请拆分查询；多个标签默认同时满足")
         return conditions
+
+    @staticmethod
+    def _boolean_conditions(query: str) -> tuple[list[StructuredCondition], str]:
+        aliases = {
+            "hat": ("戴帽", "帽子", "hat", "cap"),
+            "glasses": ("眼镜", "glasses"),
+            "backpack": ("背包", "书包", "双肩包", "backpack", "bag"),
+            "holding_phone": ("手机", "打电话", "phone"),
+            "smoking": ("抽烟", "吸烟", "smoking", "smoke"),
+            "falling": ("跌倒", "摔倒", "倒地", "falling", "fallen", "fall"),
+            "fighting": ("打架", "斗殴", "互殴", "fighting", "fight"),
+        }
+        negative_prefix = re.compile(
+            r"(?:(?:没有|没|不|未|无)(?:佩戴|戴着|戴|背着|背|携带|拿着|拿|"
+            r"带着|带|看|玩|用|使用|发生|正在|在)?\s*|"
+            r"\b(?:without|no|not|isn't|is not|doesn't|does not)"
+            r"(?:\s+(?:wearing|carrying|holding|using))?(?:\s+(?:a|an|any))?\s*)$"
+        )
+        residual = list(query)
+        conditions = []
+        for field, tokens in aliases.items():
+            pattern = "|".join(
+                rf"\b{re.escape(token)}\b" if token.isascii() else re.escape(token)
+                for token in sorted(tokens, key=len, reverse=True)
+            )
+            values = set()
+            for match in re.finditer(pattern, query):
+                negative = negative_prefix.search(query[:match.start()])
+                values.add(negative is None)
+                start = negative.start() if negative else match.start()
+                residual[start:match.end()] = " " * (match.end() - start)
+            if len(values) > 1:
+                raise ValueError("同一标签包含矛盾条件，请拆分查询")
+            if values:
+                conditions.append(StructuredCondition(field, (values.pop(),)))
+        return conditions, "".join(residual)
 
     def _query_upper_color(self, query: str) -> str | None:
         color_tokens = (
@@ -822,14 +869,16 @@ class StructuredSearchService:
             "fallen": "falling",
             "fighting": "fighting",
         }
-        if label_fields.get(detector_label) == condition.field and True in condition.values:
-            return True
+        if label_fields.get(detector_label) == condition.field:
+            return True in condition.values
         if not self._confidence_allows(attributes, condition.field):
             return False
         values = self._attribute_values(attributes, bbox, condition.field)
         if not values:
             return False
         expected = set(condition.values)
+        if expected == {False}:
+            return all(self._normalize_value(value) is False for value in values)
         return any(self._normalize_value(value) in expected for value in values)
 
     def _attribute_values(
@@ -936,5 +985,12 @@ class StructuredSearchService:
         if value is None:
             return None
         if isinstance(value, str):
-            return value.strip().lower()
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "是"}:
+                return True
+            if normalized in {"false", "no", "否"}:
+                return False
+            if normalized in {"unknown", "未知", ""}:
+                return None
+            return normalized
         return value

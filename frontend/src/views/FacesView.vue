@@ -6,7 +6,9 @@ import { face as faceApi, persons as personsApi } from "@/api/client";
 import type {
   FaceDiagnosticItem,
   FaceRecognitionResponse,
+  Person,
   PersonTrajectoryPoint,
+  PersonVisitStats,
 } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
 import FaceBoxThumb from "@/components/FaceBoxThumb.vue";
@@ -33,7 +35,7 @@ const MODE_TEXT: Record<string, string> = {
 
 const route = useRoute();
 const { showError, toast } = useToast();
-const { persons, activePersonId, refresh: refreshPersons } = usePersons();
+const { persons, activePersonId, activePerson, refresh: refreshPersons } = usePersons();
 
 const enrollPersonId = ref<string | null>(null);
 const newPerson = ref({ name: "", employee_no: "", department: "", phone: "" });
@@ -56,6 +58,9 @@ const trajectoryMode = ref("face");
 const trajectory = ref<PersonTrajectoryPoint[]>([]);
 const trajectoryWarnings = ref<string[]>([]);
 const trajectoryLoading = ref(false);
+
+const visitStats = ref<PersonVisitStats | null>(null);
+const vipToggling = ref<string | null>(null);
 
 const bestMatch = computed(() => faceResult.value?.matches?.[0]);
 
@@ -108,6 +113,35 @@ async function loadTrajectory(personId: string) {
   }
 }
 
+let visitStatsSeq = 0;
+
+async function loadVisitStats(personId: string) {
+  const seq = ++visitStatsSeq;
+  try {
+    const result = await personsApi.visitStats(personId);
+    if (seq !== visitStatsSeq) return;
+    visitStats.value = result;
+  } catch (error) {
+    if (seq !== visitStatsSeq) return;
+    visitStats.value = null;
+    showError(error);
+  }
+}
+
+async function toggleVip(person: Person) {
+  vipToggling.value = person.id;
+  try {
+    const updated = await personsApi.setVip(person.id, !person.is_vip);
+    const index = persons.value.findIndex((item) => item.id === person.id);
+    if (index !== -1) persons.value[index] = updated;
+    toast(updated.is_vip ? "已设为 VIP" : "已取消 VIP");
+  } catch (error) {
+    showError(error);
+  } finally {
+    vipToggling.value = null;
+  }
+}
+
 async function loadLibrary() {
   await refreshPersons();
   if (activePersonId.value && !persons.value.some((p) => p.id === activePersonId.value)) {
@@ -115,10 +149,11 @@ async function loadLibrary() {
   }
   if (!enrollPersonId.value) enrollPersonId.value = activePersonId.value;
   if (activePersonId.value) {
-    await loadTrajectory(activePersonId.value);
+    await Promise.all([loadTrajectory(activePersonId.value), loadVisitStats(activePersonId.value)]);
   } else {
     trajectory.value = [];
     trajectoryWarnings.value = [];
+    visitStats.value = null;
   }
 }
 
@@ -179,7 +214,7 @@ async function recognize() {
     faceResult.value = result;
     if (result.person?.id) {
       activePersonId.value = result.person.id;
-      await loadTrajectory(result.person.id);
+      await Promise.all([loadTrajectory(result.person.id), loadVisitStats(result.person.id)]);
     }
     toast(result.result_type === "known" ? "识别成功" : "未命中人员");
   } catch (error) {
@@ -239,6 +274,7 @@ async function enrollDiagnostic(item: FaceDiagnosticItem) {
 function selectPerson(personId: string) {
   activePersonId.value = personId;
   void loadTrajectory(personId);
+  void loadVisitStats(personId);
 }
 
 function diagnosticFaceSize(item: FaceDiagnosticItem): string {
@@ -366,11 +402,36 @@ onMounted(async () => {
           <img v-if="person.avatar_url" :src="person.avatar_url" :alt="person.name" />
           <div v-else class="person-avatar" aria-hidden="true">{{ personInitial(person.name) }}</div>
           <div>
-            <strong>{{ person.name }}</strong>
+            <strong>
+              {{ person.name }}
+              <span v-if="person.is_vip" class="badge vip-badge">VIP</span>
+            </strong>
             <span>{{ personSubtitle(person) }}</span>
           </div>
-          <button class="mini-button" type="button" @click="selectPerson(person.id)">轨迹</button>
+          <div class="person-item-actions">
+            <button class="mini-button" type="button" @click="selectPerson(person.id)">轨迹</button>
+            <button
+              class="mini-button"
+              type="button"
+              :disabled="vipToggling === person.id"
+              @click="toggleVip(person)"
+            >
+              {{ person.is_vip ? "取消VIP" : "设为VIP" }}
+            </button>
+          </div>
         </article>
+      </div>
+
+      <div v-if="activePerson" class="visit-stats-bar">
+        <strong>{{ activePerson.name }} 的到访情况</strong>
+        <template v-if="visitStats">
+          <span>
+            近 {{ visitStats.window_days }} 天内到访 {{ visitStats.visit_days_in_window }} 天
+            · 共出现 {{ visitStats.total_appearances }} 次
+          </span>
+          <span v-if="visitStats.last_seen">最近一次 {{ fmtTime(visitStats.last_seen) }}</span>
+          <span v-if="visitStats.is_repeat_visitor" class="badge repeat-badge">回头客</span>
+        </template>
       </div>
     </section>
 

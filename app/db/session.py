@@ -356,7 +356,32 @@ def _ensure_compatible_schema() -> None:
                     "ON vector_index_jobs (next_run_at)"
                 )
             )
+    if "persons" in table_names:
+        person_columns = {column["name"] for column in inspector.get_columns("persons")}
+        if "is_vip" not in person_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE persons ADD COLUMN is_vip BOOLEAN DEFAULT 0 NOT NULL"
+                        if engine.dialect.name != "postgresql"
+                        else "ALTER TABLE persons ADD COLUMN is_vip BOOLEAN DEFAULT FALSE NOT NULL"
+                    )
+                )
     if "person_observation_index" in table_names:
+        observation_columns = {
+            column["name"] for column in inspector.get_columns("person_observation_index")
+        }
+        if "person_is_vip" not in observation_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE person_observation_index "
+                        "ADD COLUMN person_is_vip BOOLEAN DEFAULT 0 NOT NULL"
+                        if engine.dialect.name != "postgresql"
+                        else "ALTER TABLE person_observation_index "
+                        "ADD COLUMN person_is_vip BOOLEAN DEFAULT FALSE NOT NULL"
+                    )
+                )
         _ensure_indexes(
             {
                 "ix_person_observation_crop": (

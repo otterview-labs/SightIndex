@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 from app.schemas.events import PersonTrajectoryPoint
@@ -16,6 +16,10 @@ class PersonCreate(BaseModel):
     status: str = "active"
 
 
+class PersonUpdate(BaseModel):
+    is_vip: bool
+
+
 class PersonRead(ORMModel):
     id: uuid.UUID
     name: str
@@ -24,8 +28,24 @@ class PersonRead(ORMModel):
     department: str | None
     avatar_url: str | None
     status: str
+    is_vip: bool
     created_at: datetime
     updated_at: datetime
+
+
+class PersonVisitStats(BaseModel):
+    person_id: uuid.UUID
+    # All-time, so a person seen only outside the rolling window below still shows when they
+    # were last here rather than looking unseen.
+    total_appearances: int
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    window_days: int
+    # Distinct calendar days seen within the trailing window, not a raw appearance count: someone
+    # lingering all day should not outrank someone who came back on three separate days.
+    visit_days_in_window: int
+    repeat_visitor_threshold_days: int
+    is_repeat_visitor: bool
 
 
 class FaceEmbeddingRead(ORMModel):
@@ -90,6 +110,10 @@ class FaceDiagnosticItem(BaseModel):
 class FaceDiagnosticResponse(BaseModel):
     threshold: float
     items: list[FaceDiagnosticItem]
+
+
+class FaceDiagnosticRequest(BaseModel):
+    crop_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
 
 
 class FaceRecognitionRebuildResponse(BaseModel):
