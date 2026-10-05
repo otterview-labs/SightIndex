@@ -1,9 +1,11 @@
 # SightIndex
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [首次体验](docs/first-run.zh-CN.md) | [反馈问题](https://github.com/otterview-labs/SightIndex/issues)
 
 SightIndex 是一项可自行托管的视觉索引与检索服务。它接收图像、视频以及 RTSP/HTTP
 视频流，提取可检索的媒体内容和人员裁剪图，并通过 FastAPI API 与 Vue 控制台提供结果。
+
+可以用它管理本地素材、查看检测出的人员裁剪图，再检索候选画面供人工核对。默认配置可体验素材上传与控制台；语义检索和跨摄像头候选检索需要另行配置模型服务与索引。
 
 仅对接“上传、检索、人脸库”时，请参阅 [核心接口文档](docs/api-core-functions.zh-CN.md)
 和配套的 [精简 OpenAPI](docs/openapi-core-functions.json)，其中注明了北京已部署版本的参数、
@@ -35,6 +37,18 @@ SightIndex 返回排序后的证据和置信度元数据。ReID 结果只是候�
 返回的相似度不是准确率，颜色、性别等条件仍需核验，结果不用于自动关联人员身份。
 页面显示索引覆盖、属性覆盖及增量索引开关；模型或索引故障显示错误而非空匹配。
 详细的限制、验收和回退步骤见 `deploy/containers/README.md`。
+
+## 先选择一条体验流程
+
+| 想做什么 | 所需配置 |
+| --- | --- |
+| 上传图片，查看素材记录 | 默认 SQLite 配置 |
+| 处理图片，查看检测出的人员 | 默认 OpenCV HOG 检测器，结果取决于图片 |
+| 按解析后的属性检索 | 配置 VLM 并解析裁剪图，默认配置没有解析属性 |
+| 用文字描述检索候选画面 | 语义 embedding、Milvus 与已建立的索引 |
+| 比较不同摄像头的人员候选 | 可选 ReID 服务与索引，结果需人工核验 |
+
+[首次体验指南](docs/first-run.zh-CN.md)说明上传、处理和查看结果的步骤，也说明服务启动后为何可能检索为空。
 
 ## 架构
 
@@ -91,6 +105,8 @@ curl --fail http://127.0.0.1:8000/api/media/counts
 
 进行前端开发时，运行 `npm --prefix frontend run dev`；Vite 监听 `5173` 端口，并默认将
 API 请求代理到 `http://127.0.0.1:8000`。
+
+接下来按[首次体验](docs/first-run.zh-CN.md#上传处理和查看结果)完成图片上传与处理。
 
 ## 部署
 

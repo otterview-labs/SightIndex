@@ -1,10 +1,14 @@
 # SightIndex
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [First run](docs/first-run.md) | [Issues](https://github.com/otterview-labs/SightIndex/issues)
 
 SightIndex is a self-hosted visual indexing and retrieval service. It accepts images, videos, and
 RTSP/HTTP streams; extracts searchable media and person crops; and exposes the results through a
 FastAPI API and a Vue console.
+
+Use it to organize local media, inspect detected person crops, and retrieve candidate frames for
+human review. The default setup lets you try ingestion and the console. Semantic search and
+cross-camera candidate retrieval require additional model services and indexes.
 
 The repository is an experimental reference implementation. Face recognition and person
 re-identification process biometric data. Deploy them only with a lawful basis, appropriate
@@ -23,6 +27,19 @@ consent, access controls, retention limits, and human review.
 
 SightIndex returns ranked evidence and confidence metadata. ReID results are candidates, not proof
 of identity or a continuous path between cameras.
+
+## Choose your first workflow
+
+| Goal | Setup |
+| --- | --- |
+| Upload an image and inspect its record | Default SQLite configuration |
+| Process an image and inspect detected people | Default OpenCV HOG detector; results depend on the image |
+| Search by parsed attributes | Analyze crops with a configured VLM; the default setup has no parsed attributes |
+| Retrieve candidates from a text description | Configure semantic embeddings, Milvus and an indexed collection |
+| Compare people across cameras | Configure the optional ReID service and its index; verify candidates manually |
+
+Start with the [first-run guide](docs/first-run.md). It separates a successful local startup from
+a configured model pipeline and explains what an empty result means.
 
 ## Architecture
 
@@ -80,6 +97,8 @@ Then open:
 
 For frontend development, run `npm --prefix frontend run dev`; Vite listens on port `5173` and
 proxies API calls to `http://127.0.0.1:8000` by default.
+
+Next, follow [upload, process and inspect](docs/first-run.md#upload-process-and-inspect).
 
 ## Deployment
 
