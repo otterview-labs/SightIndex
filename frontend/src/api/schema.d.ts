@@ -2117,7 +2117,8 @@ export interface components {
          *
          *     Not a match: no threshold decides whether it is returned. It answers "if they went there,
          *     which one were they" and leaves the judgement to whoever is looking, which is the only
-         *     honest thing to do when a real crossing scores 0.43-0.48 and chance reaches 0.44.
+         *     honest thing to do when the deployment has insufficient identity evidence. Similarity and
+         *     the reference chance ceiling alone are not calibrated same-person probabilities.
          */
         ReidCameraLink: {
             /** Camera Id */
@@ -2139,6 +2140,8 @@ export interface components {
             person_name?: string | null;
             /** Person Is Vip */
             person_is_vip?: boolean | null;
+            /** Calibrated Match Probability */
+            calibrated_match_probability?: number | null;
             /** Stature Agreement */
             stature_agreement?: number | null;
             /** Attribute Agreement */
@@ -2522,6 +2525,8 @@ export interface components {
             evidence_level?: string | null;
             /** Decision Reason */
             decision_reason?: string | null;
+            /** Calibrated Match Probability */
+            calibrated_match_probability?: number | null;
             /**
              * Frame Count
              * @default 1

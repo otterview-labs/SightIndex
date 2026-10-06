@@ -1,6 +1,5 @@
 import json
 import logging
-import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +22,7 @@ class Detection:
     bbox: dict[str, Any]
     confidence: float
     label: str = "person"
+    source_index: int | None = None
 
 
 class PersonDetector:
@@ -404,11 +404,13 @@ class FrameProcessingService:
             )
             self.db.refresh(image)
             original_thumbnail_url = image.thumbnail_url
-            existing = list(self.db.scalars(
-                select(PersonCrop)
-                .where(PersonCrop.image_id == image.id)
-                .order_by(PersonCrop.created_at, PersonCrop.id)
-            ))
+            existing = list(
+                self.db.scalars(
+                    select(PersonCrop)
+                    .where(PersonCrop.image_id == image.id)
+                    .order_by(PersonCrop.created_at, PersonCrop.id)
+                )
+            )
             if image.processed_at is not None or existing:
                 image.processed_at = image.processed_at or datetime.now(UTC)
                 self.db.commit()
@@ -420,38 +422,54 @@ class FrameProcessingService:
             image_detections = self.quality_filter_detections(
                 raw_detections, frame_width, frame_height
             )
-            if image_detections:
-                annotated_url = self._create_annotated_frame_file(image_path, image_detections)
-                if annotated_url:
-                    image.thumbnail_url = annotated_url
-                    self.db.add(image)
-
             for detection in image_detections:
                 crop_url = self._create_crop_file(image_path, detection)
+                if crop_url is None:
+                    continue
                 created_crop_urls.append(crop_url)
                 crop_width, crop_height = self._read_image_size(crop_url)
+                if not crop_width or not crop_height:
+                    logger.warning("Written person crop could not be decoded; skipping detection")
+                    self._remove_data_file(crop_url)
+                    continue
+                crop_bbox = {
+                    **detection.bbox,
+                    "confidence": detection.confidence,
+                    "label": detection.label,
+                    "crop_width": crop_width,
+                    "crop_height": crop_height,
+                    "frame_width": frame_width,
+                    "frame_height": frame_height,
+                    "quality_pass": True,
+                }
+                # Only the capture/video orchestrator may attach an input-list association.
+                # A detector payload cannot inject or override a crossing's source index.
+                crop_bbox.pop("source_detection_index", None)
+                if detection.source_index is not None:
+                    crop_bbox["source_detection_index"] = detection.source_index
                 crop = PersonCrop(
                     image_id=image.id,
                     crop_url=crop_url,
-                    bbox={
-                        **detection.bbox,
-                        "confidence": detection.confidence,
-                        "label": detection.label,
-                        "crop_width": crop_width,
-                        "crop_height": crop_height,
-                        "frame_width": frame_width,
-                        "frame_height": frame_height,
-                        "quality_pass": True,
-                    },
+                    bbox=crop_bbox,
                     camera_id=image.camera_id,
                     location_id=image.location_id,
                     captured_at=image.captured_at,
                 )
                 self.db.add(crop)
                 crops.append(crop)
-            image.processed_at = datetime.now(UTC)
-            self.db.add(image)
-            enqueued = self._enqueue_index_jobs(image, crops)
+            if crops:
+                annotated_url = self._create_annotated_frame_file(image_path, image_detections)
+                if annotated_url:
+                    image.thumbnail_url = annotated_url
+
+            # Complete empty/filtered results, but leave technical crop failures retryable.
+            # Partial success is complete so a retry cannot duplicate its durable crops.
+            if crops or not image_detections:
+                image.processed_at = datetime.now(UTC)
+                self.db.add(image)
+                enqueued = self._enqueue_index_jobs(image, crops)
+            else:
+                enqueued = False
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -503,18 +521,39 @@ class FrameProcessingService:
         relative_path = url.removeprefix(prefix)
         return self.settings.data_dir / relative_path
 
-    def _create_crop_file(self, image_path: Path, detection: Detection) -> str:
-        self.settings.crops_dir.mkdir(parents=True, exist_ok=True)
+    def _create_crop_file(self, image_path: Path, detection: Detection) -> str | None:
+        """Write one crop, or abstain and remove only this attempt's partial output.
+
+        Reserving the generated target exclusively prevents an unlikely UUID collision from
+        overwriting or removing an existing file. A failed decoder/cropper never substitutes
+        the full scene for a person, and does not stop other detections in the same frame.
+        """
+
         filename = f"{uuid.uuid4()}{image_path.suffix or '.jpg'}"
         target = self.settings.crops_dir / filename
-
+        owns_target = False
+        completed = False
         try:
+            self.settings.crops_dir.mkdir(parents=True, exist_ok=True)
+            with target.open("xb"):
+                owns_target = True
             if not self._try_crop_with_cv2(image_path, target, detection):
-                shutil.copyfile(image_path, target)
-        except Exception:
-            self._remove_data_file(f"/data/crops/{filename}")
-            raise
-        return f"/data/crops/{filename}"
+                logger.warning("Person crop could not be produced; skipping detection")
+                return None
+            if target.stat().st_size <= 0:
+                logger.warning("Person crop writer produced an empty file; skipping detection")
+                return None
+            completed = True
+            return f"/data/crops/{filename}"
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning("Person crop failed (%s); skipping detection", type(exc).__name__)
+            return None
+        finally:
+            if owns_target and not completed:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove failed crop output", exc_info=True)
 
     def _create_annotated_frame_file(
         self,
@@ -530,19 +569,23 @@ class FrameProcessingService:
         if image is None:
             return None
 
-        self.settings.thumbnails_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{uuid.uuid4()}{image_path.suffix or '.jpg'}"
         target = self.settings.thumbnails_dir / filename
-        for detection in detections:
-            self._draw_detection_box(cv2, image, detection)
+        owns_target = False
+        completed = False
         try:
+            self.settings.thumbnails_dir.mkdir(parents=True, exist_ok=True)
+            with target.open("xb"):
+                owns_target = True
+            for detection in detections:
+                self._draw_detection_box(cv2, image, detection)
             if not self._write_jpeg(cv2, target, image, self.settings.thumbnail_jpeg_quality):
-                self._remove_data_file(f"/data/thumbnails/{filename}")
                 return None
-        except Exception:
-            self._remove_data_file(f"/data/thumbnails/{filename}")
-            raise
-        return f"/data/thumbnails/{filename}"
+            completed = True
+            return f"/data/thumbnails/{filename}"
+        finally:
+            if owns_target and not completed:
+                self._remove_data_file(f"/data/thumbnails/{filename}")
 
     def _draw_detection_box(self, cv2: Any, image: Any, detection: Detection) -> None:
         height, width = image.shape[:2]
@@ -582,14 +625,20 @@ class FrameProcessingService:
         except Exception:
             return False
 
-        image = cv2.imread(str(image_path))
-        if image is None:
-            return False
+        try:
+            image = cv2.imread(str(image_path))
+            if image is None:
+                return False
 
-        x1, y1, x2, y2 = self._bounded_bbox(image, detection, padded=True)
-        crop = image[y1:y2, x1:x2]
-        crop = self._enhance_crop(cv2, crop)
-        return self._write_jpeg(cv2, target, crop, self.settings.person_crop_jpeg_quality)
+            x1, y1, x2, y2 = self._bounded_bbox(image, detection, padded=True)
+            crop = image[y1:y2, x1:x2]
+            if crop.size == 0:
+                return False
+            crop = self._enhance_crop(cv2, crop)
+            return self._write_jpeg(cv2, target, crop, self.settings.person_crop_jpeg_quality)
+        except (cv2.error, OSError, ValueError, TypeError, OverflowError) as exc:
+            logger.warning("Person crop image operation failed (%s)", type(exc).__name__)
+            return False
 
     def _is_quality_detection(
         self,
@@ -704,7 +753,10 @@ class FrameProcessingService:
             import cv2  # type: ignore[import-not-found]
         except Exception:
             return None, None
-        image = cv2.imread(str(path))
+        try:
+            image = cv2.imread(str(path))
+        except (cv2.error, OSError, ValueError):
+            return None, None
         if image is None:
             return None, None
         height, width = image.shape[:2]

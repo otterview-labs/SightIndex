@@ -91,6 +91,9 @@ class ReidMatchItem(BaseModel):
     fusion_score: float | None = None
     evidence_level: str | None = None
     decision_reason: str | None = None
+    # Optional estimate from an explicitly configured cross-camera body-score logistic fit.
+    # Not a fused probability, and absent for same/unknown cameras or missing calibration.
+    calibrated_match_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     # A match stands for a visit, not a frame: how many frames it merged and when it ran.
     frame_count: int = 1
     first_seen: datetime | None = None
@@ -140,7 +143,8 @@ class ReidCameraLink(BaseModel):
 
     Not a match: no threshold decides whether it is returned. It answers "if they went there,
     which one were they" and leaves the judgement to whoever is looking, which is the only
-    honest thing to do when a real crossing scores 0.43-0.48 and chance reaches 0.44.
+    honest thing to do when the deployment has insufficient identity evidence. Similarity and
+    the reference chance ceiling alone are not calibrated same-person probabilities.
     """
 
     camera_id: uuid.UUID | None = None
@@ -153,6 +157,7 @@ class ReidCameraLink(BaseModel):
     person_id: uuid.UUID | None = None
     person_name: str | None = None
     person_is_vip: bool | None = None
+    calibrated_match_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     # How closely this candidate's height rank matches the query's, 1 identical and 0 fifty
     # percentile points apart. None when either side's height could not be measured.
     stature_agreement: float | None = None

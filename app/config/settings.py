@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,7 +54,17 @@ class Settings(BaseSettings):
     count_dedup_seconds: int = Field(default=60, ge=1)
     line_crossing_point: str = "bottom_center"
     line_crossing_match_distance: float = Field(default=0.32, ge=0.01, le=1.0)
-    line_crossing_track_idle_seconds: float = Field(default=6.0, ge=0.1, le=600.0)
+    line_crossing_track_idle_seconds: float = Field(
+        default=6.0,
+        ge=0.1,
+        le=600.0,
+        validation_alias=AliasChoices(
+            "LINE_CROSSING_TRACK_IDLE_SECONDS",
+            "line_crossing_track_idle_seconds",
+            "COUNTING_TRACK_IDLE_SECONDS",
+            "counting_track_idle_seconds",
+        ),
+    )
     line_crossing_track_max_missed_frames: int = Field(default=2, ge=1, le=120)
     # One crop per visit rather than one per capture interval. Without this a person lingering
     # at a door is stored every frame -- 127 times over five minutes on this deployment -- and
@@ -79,6 +89,11 @@ class Settings(BaseSettings):
     # A visit that never ends is stored again anyway, so someone standing at the door all
     # afternoon does not appear exactly once at the moment they arrived.
     person_crop_visit_max_seconds: float = Field(default=300.0, ge=5.0, le=86400.0)
+    # Keep the first usable detection and a bounded number of clearly better native-ROI frames.
+    # This is local sampling, not a verified identity track or a new ReID scoring threshold.
+    person_crop_visit_max_samples: int = Field(default=3, ge=1, le=3)
+    person_crop_visit_sample_interval_seconds: float = Field(default=2.0, ge=0.0, le=600.0)
+    person_crop_visit_quality_improvement_ratio: float = Field(default=0.15, ge=0.0, le=2.0)
     person_detector: str = "yolo"
     hog_hit_threshold: float = Field(default=0.5, ge=-2.0, le=5.0)
     yolo_model: str = "yolo11n.pt"
@@ -295,6 +310,10 @@ class Settings(BaseSettings):
     # at two doors within eight seconds. Links below it are shown but marked as within reach of
     # coincidence, so a weak best-candidate is never mistaken for a finding.
     reid_chance_ceiling: float = Field(default=0.44, ge=0.0, le=1.0)
+    # Optional deployment-specific logistic fit of cross-camera body scores. No portable default:
+    # configuring these is not evidence that a fit was validated on the current cameras/gallery.
+    reid_cross_camera_calibration_coef: float | None = Field(default=None, allow_inf_nan=False)
+    reid_cross_camera_calibration_intercept: float | None = Field(default=None, allow_inf_nan=False)
     # One person lingering at one door produces a frame every reid interval, and twenty of those
     # fill a top-20 completely -- burying the other camera, which is the only reason to run the
     # search. Consecutive hits from the same camera within this many seconds count as one visit.
@@ -350,6 +369,12 @@ class Settings(BaseSettings):
     person_trajectory_vector_max_seconds: float = Field(default=8.0, ge=0.1, le=300.0)
     person_trajectory_vector_embedding_timeout_seconds: int = Field(default=5, ge=1, le=300)
     person_trajectory_reid_max_seconds: float = Field(default=8.0, ge=0.1, le=300.0)
+
+    @property
+    def counting_track_idle_seconds(self) -> float:
+        """Read-only compatibility alias for the former capture configuration name."""
+
+        return self.line_crossing_track_idle_seconds
 
     @property
     def uploads_dir(self) -> Path:

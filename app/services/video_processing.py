@@ -1,9 +1,10 @@
+import math
+import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from time import monotonic
 from typing import Any
 
 from fastapi import UploadFile
@@ -42,7 +43,7 @@ class PersonTrack:
     center: tuple[float, float]
     side: float
     counted: bool = False
-    last_seen_at: float = 0.0
+    last_seen_at: float | None = None
     missed_frames: int = 0
 
 
@@ -214,6 +215,10 @@ class VideoProcessingService:
                         tracks=tracks,
                         next_track_id=next_track_id,
                         observed_at=frame_file.captured_at.timestamp(),
+                        max_idle_seconds=max(
+                            self.settings.line_crossing_track_idle_seconds,
+                            frame_interval_seconds * 2.0,
+                        ),
                     )
                     if not crossings:
                         frame_file.path.unlink(missing_ok=True)
@@ -226,15 +231,10 @@ class VideoProcessingService:
                         camera_id=camera_id,
                         location_id=location_id,
                     )
-                    crossing_detections = [
-                        detections[crossing.detection_index] for crossing in crossings
-                    ]
+                    crossing_detections = self._crossing_detections(detections, crossings)
                     crops = self.processor.process_image(image, detections=crossing_detections)
                     self._try_index_frame_image(image)
-                    crops_by_detection_index = {
-                        crossing.detection_index: crop
-                        for crossing, crop in zip(crossings, crops, strict=False)
-                    }
+                    crops_by_detection_index = self._crops_by_detection_index(crops)
                     created = self._create_line_crossing_events(
                         crossings=crossings,
                         crops_by_detection_index=crops_by_detection_index,
@@ -363,6 +363,8 @@ class VideoProcessingService:
         stream_id: uuid.UUID | None = None,
         image: Image | None = None,
         crops: list[PersonCrop] | None = None,
+        now: float | None = None,
+        max_idle_seconds: float | None = None,
     ) -> tuple[int, int]:
         crossings, next_track_id = self._line_crossings(
             detections=detections,
@@ -370,11 +372,17 @@ class VideoProcessingService:
             line=line,
             tracks=tracks,
             next_track_id=next_track_id,
-            observed_at=counted_at.timestamp(),
+            observed_at=counted_at.timestamp() if now is None else now,
+            max_idle_seconds=max_idle_seconds,
         )
-        crops_by_detection_index = {
-            index: crop for index, crop in enumerate(crops or [])
-        }
+        crop_items = crops or []
+        crops_by_detection_index = self._crops_by_detection_index(crop_items)
+        has_explicit_association = any("source_detection_index" in crop.bbox for crop in crop_items)
+        if not has_explicit_association and len(crop_items) == len(detections):
+            # Compatibility for old direct callers that provide one crop for every detection.
+            # A partial list without explicit source indices must abstain instead of shifting
+            # crop identities onto the wrong crossing.
+            crops_by_detection_index = dict(enumerate(crop_items))
         count = self._create_line_crossing_events(
             crossings=crossings,
             crops_by_detection_index=crops_by_detection_index,
@@ -385,6 +393,34 @@ class VideoProcessingService:
             image=image,
         )
         return count, next_track_id
+
+    @staticmethod
+    def _crossing_detections(
+        detections: list[Detection],
+        crossings: list[LineCrossing],
+    ) -> list[Detection]:
+        """Attach the original input index without trusting mutable bbox payloads."""
+
+        return [
+            replace(
+                detections[crossing.detection_index],
+                source_index=crossing.detection_index,
+            )
+            for crossing in crossings
+        ]
+
+    @staticmethod
+    def _crops_by_detection_index(
+        crops: list[PersonCrop],
+    ) -> dict[int, PersonCrop]:
+        """Map only crops that retain their successful source detection association."""
+
+        result: dict[int, PersonCrop] = {}
+        for crop in crops:
+            source_index = crop.bbox.get("source_detection_index")
+            if isinstance(source_index, int) and not isinstance(source_index, bool):
+                result[source_index] = crop
+        return result
 
     def _create_line_crossing_events(
         self,
@@ -439,30 +475,38 @@ class VideoProcessingService:
         line: CountingLine,
         tracks: dict[int, PersonTrack],
         next_track_id: int,
+        now: float | None = None,
+        max_idle_seconds: float | None = None,
         *,
         observed_at: float | None = None,
     ) -> tuple[list[LineCrossing], int]:
-        timestamp = monotonic() if observed_at is None else observed_at
-        for track_id, track in list(tracks.items()):
-            if timestamp - track.last_seen_at >= self.settings.line_crossing_track_idle_seconds:
-                del tracks[track_id]
+        current_time = self._expire_tracks(
+            tracks,
+            now=observed_at if observed_at is not None else now,
+            max_idle_seconds=max_idle_seconds,
+        )
         height, width = frame.shape[:2]
         matched_track_ids: set[int] = set()
         crossings: list[LineCrossing] = []
         for detection_index, detection in enumerate(detections):
             center = self._detection_center(detection, width, height)
             side = self._line_side(line, center)
+            if not all(math.isfinite(value) for value in (*center, side)):
+                continue
             track = self._match_track(center, tracks, matched_track_ids)
             if track is None:
                 tracks[next_track_id] = PersonTrack(
-                    id=next_track_id, center=center, side=side, last_seen_at=timestamp
+                    id=next_track_id,
+                    center=center,
+                    side=side,
+                    last_seen_at=current_time,
                 )
                 matched_track_ids.add(next_track_id)
                 next_track_id += 1
                 continue
 
             matched_track_ids.add(track.id)
-            track.last_seen_at = timestamp
+            track.last_seen_at = current_time
             track.missed_frames = 0
             if not track.counted and self._crossed_line(track.side, side):
                 direction = "a_to_b" if track.side < side else "b_to_a"
@@ -474,9 +518,63 @@ class VideoProcessingService:
         for track_id, track in list(tracks.items()):
             if track_id not in matched_track_ids:
                 track.missed_frames += 1
-                if track.missed_frames >= self.settings.line_crossing_track_max_missed_frames:
+                if track.missed_frames >= getattr(
+                    self.settings, "line_crossing_track_max_missed_frames", 2
+                ):
                     del tracks[track_id]
         return crossings, next_track_id
+
+    def _expire_tracks(
+        self,
+        tracks: dict[int, PersonTrack],
+        *,
+        now: float | None,
+        max_idle_seconds: float | None = None,
+    ) -> float:
+        """Drop stale or corrupt tracks and return the timestamp used for this frame.
+
+        Explicit timestamps let uploaded videos advance by media time while live callers use a
+        monotonic clock.  A missing or invalid explicit timestamp safely falls back to monotonic
+        time.  If a source clock moves backwards, existing tracks are rebased instead of gaining
+        an unbounded negative age.
+        """
+
+        current_time = float(now) if now is not None else time.monotonic()
+        if not math.isfinite(current_time):
+            current_time = time.monotonic()
+        configured_idle = (
+            max_idle_seconds
+            if max_idle_seconds is not None
+            else getattr(
+                self.settings,
+                "line_crossing_track_idle_seconds",
+                getattr(self.settings, "counting_track_idle_seconds", 6.0),
+            )
+        )
+        idle_seconds = float(configured_idle)
+        if not math.isfinite(idle_seconds) or idle_seconds <= 0:
+            idle_seconds = 6.0
+
+        for track_id, track in list(tracks.items()):
+            state = (*track.center, track.side)
+            if not all(math.isfinite(value) for value in state):
+                del tracks[track_id]
+                continue
+            if track.last_seen_at is None:
+                # Tracks constructed by older callers get one normal idle window to match.
+                track.last_seen_at = current_time
+                continue
+            if not math.isfinite(track.last_seen_at):
+                del tracks[track_id]
+                continue
+            age = current_time - track.last_seen_at
+            if age < 0:
+                track.last_seen_at = current_time
+            elif age > idle_seconds or (max_idle_seconds is None and age == idle_seconds):
+                # The configured idle limit expires at its boundary. An explicit sampling
+                # window includes its last observation, keeping exactly two intervals usable.
+                del tracks[track_id]
+        return current_time
 
     def _recognition_event_for_crop(self, crop: PersonCrop | None) -> RecognitionEvent | None:
         if crop is None:
@@ -504,6 +602,8 @@ class VideoProcessingService:
             center_y = (y + height / 2) / frame_height
         else:
             center_y = (y + height) / frame_height
+        if not all(math.isfinite(value) for value in (center_x, center_y)):
+            return center_x, center_y
         return (
             max(0.0, min(1.0, center_x)),
             max(0.0, min(1.0, center_y)),

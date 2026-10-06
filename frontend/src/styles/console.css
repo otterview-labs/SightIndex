@@ -783,6 +783,61 @@ select:focus {
   color: var(--accent-strong);
 }
 
+.reid-camera-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.reid-camera-filter .mini-button {
+  min-height: 32px;
+  height: auto;
+  max-width: 100%;
+  padding-block: 6px;
+  overflow-wrap: anywhere;
+}
+
+.reid-camera-filter .mini-button.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.reid-camera-filter .mini-button:focus-visible,
+.reid-face-only-toggle input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.reid-face-only-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.reid-face-only-toggle input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.reid-face-only-toggle span {
+  min-width: 0;
+}
+
+.reid-result-origin,
+.reid-empty-camera {
+  margin: 0 0 12px;
+}
+
 .status {
   display: inline-flex;
   align-items: center;

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
-import { crops as cropsApi, reid as reidApi } from "@/api/client";
+import { crops as cropsApi, reid as reidApi, streams as streamsApi } from "@/api/client";
 import type {
   PersonCropRead,
   ReidCameraLink,
@@ -11,6 +11,7 @@ import type {
   ReidLinkResponse,
   ReidMatchItem,
   ReidStatusResponse,
+  VideoStream,
 } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
 import FileField from "@/components/FileField.vue";
@@ -35,6 +36,9 @@ const cameraLinks = ref<ReidLinkResponse | null>(null);
 // beats_chance, evidence_level), so hiding the weak ones by default just makes a camera with no
 // strong candidate look like it has no data at all.
 const showWeakCameraLinks = ref(true);
+const selectedCameraKey = ref<string | null>(null);
+const faceOnlyMode = ref(false);
+const allCameras = ref<VideoStream[]>([]);
 const queryFile = ref<File | null>(null);
 const queryPreview = ref("");
 const results = ref<ReidMatchItem[] | null>(null);
@@ -65,10 +69,11 @@ function isCurrentQuery(cropId: string, generation: number): boolean {
 }
 
 const resultSummary = computed(() => {
-  const items = results.value;
-  if (!items) return "";
-  const frames = items.reduce((total, item) => total + (item.frame_count ?? 1), 0);
-  return frames > items.length ? `${items.length} 次出现 · ${frames} 帧` : `${items.length} 条`;
+  if (results.value === null) return "";
+  const items = resultGroups.value.flatMap((group) => group.items);
+  const frames = resultGroups.value.reduce((total, group) => total + group.frames, 0);
+  const suffix = selectedCameraKey.value === null ? "" : "（已按摄像头筛选）";
+  return (frames > items.length ? `${items.length} 次出现 · ${frames} 帧` : `${items.length} 条`) + suffix;
 });
 
 const coverage = computed(() => {
@@ -95,11 +100,24 @@ const weakCameraLinks = computed(() =>
   ),
 );
 
-const visibleCameraLinks = computed(() =>
+const allowedCameraLinks = computed(() =>
   showWeakCameraLinks.value
     ? [...credibleCameraLinks.value, ...weakCameraLinks.value]
     : credibleCameraLinks.value,
 );
+
+type ReidResultCardItem = ReidMatchItem | ReidCameraLink;
+
+function hasSupportedFace(item: ReidResultCardItem): boolean {
+  return item.face_match === true && item.evidence_level !== "rejected"
+    && item.face_query_identity_verified !== false
+    && item.face_candidate_identity_verified !== false;
+}
+
+const visibleCameraLinks = computed(() => allowedCameraLinks.value.filter((link) =>
+  (!faceOnlyMode.value || hasSupportedFace(link))
+    && (selectedCameraKey.value === null || (link.camera_id ?? "unknown") === selectedCameraKey.value),
+));
 
 const cameraPoolCoverageHint = computed(() => {
   const coverage = cameraLinks.value?.candidate_coverage;
@@ -238,11 +256,23 @@ function onPreviewKeydown(event: KeyboardEvent) {
 // Every result repeats the camera when a search stays at one door, so say it once instead.
 // One camera per block. Sorted purely by score the doors interleave, and the question the page
 // asks -- where has this person been -- has to be counted out of the list rather than read off it.
-const resultGroups = computed(() => {
+const backfilledCropIds = computed(() => {
+  const searchedCameras = new Set((results.value ?? []).map((item) => item.camera_id ?? "unknown"));
+  return new Set(allowedCameraLinks.value
+    .filter((link) => !searchedCameras.has(link.camera_id ?? "unknown"))
+    .map((link) => link.crop_id));
+});
+
+async function saveResultFeedback(item: ReidResultCardItem, samePerson: boolean) {
+  await saveFeedback(item, samePerson, backfilledCropIds.value.has(item.crop_id) ? "camera_link" : "search");
+}
+
+const allResultGroups = computed(() => {
   const groups = new Map<
     string,
-    { key: string; camera: string; location: string; items: ReidMatchItem[]; frames: number }
+    { key: string; camera: string; location: string; items: ReidResultCardItem[]; frames: number }
   >();
+  if (results.value === null) return [];
   for (const item of results.value ?? []) {
     const key = item.camera_id ?? "unknown";
     const group = groups.get(key) ?? {
@@ -256,9 +286,61 @@ const resultGroups = computed(() => {
     group.frames += item.frame_count ?? 1;
     groups.set(key, group);
   }
+  // A clue fills a camera only when search admitted no candidate there. It keeps its evidence
+  // and feedback origin instead of silently becoming an ordinary search match.
+  for (const link of allowedCameraLinks.value) {
+    const key = link.camera_id ?? "unknown";
+    if (groups.get(key)?.items.length) continue;
+    groups.set(key, {
+      key,
+      camera: link.camera_name || "未知摄像头",
+      location: link.location_name || "",
+      items: [link],
+      frames: 1,
+    });
+  }
+  // Append registered cameras after the ranked evidence, without claiming an empty card was
+  // exhaustively searched: the global candidate pool may have omitted its camera entirely.
+  for (const camera of allCameras.value) {
+    const key = camera.camera_id;
+    if (!key || groups.has(key)) continue;
+    groups.set(key, {
+      key,
+      camera: camera.name || "未知摄像头",
+      location: camera.location_name || "",
+      items: [],
+      frames: 0,
+    });
+  }
   // First appearance follows the server's face-first ranking. Sorting numeric fusion_score
   // again would put a strong body-only door ahead of a reliable matching face at another door.
   return [...groups.values()];
+});
+
+const cameraFilterOptions = computed(() => {
+  const cameras = new Map(allResultGroups.value.map((group) => [group.key, group.camera]));
+  for (const camera of allCameras.value) {
+    if (camera.camera_id && !cameras.has(camera.camera_id)) {
+      cameras.set(camera.camera_id, camera.name || "未知摄像头");
+    }
+  }
+  for (const link of allowedCameraLinks.value) {
+    const key = link.camera_id ?? "unknown";
+    if (!cameras.has(key)) cameras.set(key, link.camera_name || "未知摄像头");
+  }
+  return [...cameras.entries()].map(([key, label]) => ({ key, label }));
+});
+
+const resultGroups = computed(() => {
+  const groups = allResultGroups.value.filter((group) =>
+    selectedCameraKey.value === null || group.key === selectedCameraKey.value,
+  );
+  if (!faceOnlyMode.value) return groups;
+  return groups.map((group) => {
+    const items = group.items.filter(hasSupportedFace);
+    const frames = items.reduce((total, item) => total + ("frame_count" in item ? item.frame_count ?? 1 : 1), 0);
+    return { ...group, items, frames };
+  });
 });
 
 function clockOf(value: string | null | undefined): string {
@@ -269,19 +351,27 @@ function clockOf(value: string | null | undefined): string {
 // the grid ragged. State the day once above the grid instead, when there is only one.
 const singleDay = computed(() => {
   const days = new Set(
-    (results.value ?? []).map((item) => fmtTime(item.first_seen ?? item.captured_at).slice(0, 5)),
+    resultGroups.value.flatMap((group) => group.items)
+      .map((item) => fmtTime(("first_seen" in item ? item.first_seen : null) ?? item.captured_at).slice(0, 5)),
   );
   return days.size === 1 ? [...days][0] : "";
 });
 
 // One result is a visit, not a frame. Show how long it lasted rather than a single instant.
-function visitWhen(item: ReidMatchItem): string {
-  const stamp = item.first_seen ?? item.captured_at;
+function itemImageUrl(item: ReidResultCardItem): string | null | undefined {
+  return item.crop_url || ("image_url" in item ? item.image_url : null);
+}
+
+function visitWhen(item: ReidResultCardItem): string {
+  const firstSeen = "first_seen" in item ? item.first_seen : null;
+  const lastSeen = "last_seen" in item ? item.last_seen : null;
+  const frameCount = "frame_count" in item ? item.frame_count ?? 1 : 1;
+  const stamp = firstSeen ?? item.captured_at;
   const prefix = singleDay.value ? "" : `${fmtTime(stamp).slice(0, 5)} `;
-  if ((item.frame_count ?? 1) <= 1 || !item.first_seen || !item.last_seen) {
+  if (frameCount <= 1 || !firstSeen || !lastSeen) {
     return `${prefix}${clockOf(stamp)}`;
   }
-  return `${prefix}${clockOf(item.first_seen)}–${clockOf(item.last_seen)} ×${item.frame_count}`;
+  return `${prefix}${clockOf(firstSeen)}–${clockOf(lastSeen)} ×${frameCount}`;
 }
 
 const blockReason = computed(() => {
@@ -301,6 +391,14 @@ const blockReason = computed(() => {
 async function loadStatus() {
   try {
     status.value = await reidApi.status();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function loadCameras() {
+  try {
+    allCameras.value = await streamsApi.list();
   } catch (error) {
     showError(error);
   }
@@ -388,6 +486,7 @@ function onFileChange(file: File | null) {
   resultsQueryCropId.value = null;
   cameraLinks.value = null;
   showWeakCameraLinks.value = true;
+  selectedCameraKey.value = null;
   feedbackByCandidate.value = {};
   queryFrameCount.value = 1;
   // Removing an upload explicitly restores the stored crop, including its own links/feedback.
@@ -458,6 +557,7 @@ async function activateSourceCrop(cropId: string | null) {
   queryFrameCount.value = 1;
   feedbackByCandidate.value = {};
   showWeakCameraLinks.value = true;
+  selectedCameraKey.value = null;
   if (queryPreview.value) URL.revokeObjectURL(queryPreview.value);
   queryPreview.value = "";
   queryFile.value = null;
@@ -479,6 +579,7 @@ async function activateSourceCrop(cropId: string | null) {
 onMounted(async () => {
   const generation = queryGeneration;
   window.addEventListener("keydown", onPreviewKeydown);
+  void loadCameras();
   await loadStatus();
   if (generation === queryGeneration) await activateSourceCrop(routeCropId(route.query.crop_id));
 });
@@ -643,7 +744,7 @@ onBeforeUnmount(() => {
           <h2 id="reidLinksTitle">跨摄像头线索</h2>
           <p>
             每个其他摄像头的一条候选，不代表确认到访。人体分低于参考线
-            {{ cameraLinks.chance_ceiling.toFixed(2) }} 且无更强证据的线索默认收起。
+            {{ cameraLinks.chance_ceiling.toFixed(2) }} 且无更强证据的线索会明确标为低置信。
           </p>
         </div>
         <button
@@ -664,10 +765,10 @@ onBeforeUnmount(() => {
         {{ cameraMetadataHint }}
       </p>
       <EmptyState
-        v-if="!credibleCameraLinks.length && !showWeakCameraLinks"
+        v-if="!visibleCameraLinks.length"
         class="reid-link-empty"
-        title="暂无优先核对的跨摄像头候选"
-        :hint="weakCameraLinks.length ? '其他摄像头仍有最佳候选，但人体分数处于巧合区间，可按需展开核对。' : '本次没有可展示的跨摄像头线索；这不等于确认没有到访。'"
+        title="当前筛选下没有跨摄像头线索"
+        :hint="faceOnlyMode ? '当前没有人脸证据支持的候选；关闭仅看人脸确认结果可查看人体线索。' : selectedCameraKey !== null ? '可选择全部摄像头查看其他线索；没有候选不等于确认没有到访。' : weakCameraLinks.length && !showWeakCameraLinks ? '其他摄像头仍有低置信线索，可按需展开核对。' : '本次没有可展示的跨摄像头线索；这不等于确认没有到访。'"
       />
       <ul v-if="visibleCameraLinks.length" class="reid-link-list">
         <li v-for="link in visibleCameraLinks" :key="link.crop_id">
@@ -715,7 +816,7 @@ onBeforeUnmount(() => {
     <section class="panel reid-results" aria-labelledby="reidResultsTitle">
       <div class="section-head">
         <div>
-          <h2 id="reidResultsTitle">检索候选</h2>
+          <h2 id="reidResultsTitle">检索候选及跨摄像头线索</h2>
         </div>
         <div class="reid-result-actions">
           <span v-if="results" class="source-count">{{ resultSummary }}</span>
@@ -729,6 +830,34 @@ onBeforeUnmount(() => {
           </a>
         </div>
       </div>
+
+      <div v-if="cameraFilterOptions.length > 1" class="reid-camera-filter" role="group" aria-label="按摄像头筛选候选和线索">
+        <button
+          class="mini-button"
+          type="button"
+          :aria-pressed="selectedCameraKey === null"
+          :class="{ active: selectedCameraKey === null }"
+          @click="selectedCameraKey = null"
+        >
+          全部摄像头
+        </button>
+        <button
+          v-for="option in cameraFilterOptions"
+          :key="option.key"
+          class="mini-button"
+          type="button"
+          :aria-pressed="selectedCameraKey === option.key"
+          :class="{ active: selectedCameraKey === option.key }"
+          @click="selectedCameraKey = option.key"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+
+      <label class="reid-face-only-toggle">
+        <input v-model="faceOnlyMode" type="checkbox" />
+        <span>仅看人脸确认结果（人体相似或人脸来源未验证的线索会隐藏，仍需核对图片）</span>
+      </label>
 
       <ReidFaceCoverageSummary v-if="results !== null" :coverage="resultsFaceCoverage" scope="search" />
 
@@ -747,37 +876,48 @@ onBeforeUnmount(() => {
         <EmptyState v-if="searching" title="检索中" />
         <EmptyState v-else-if="results === null" title="还没有检索" />
         <EmptyState
-          v-else-if="!results.length"
+          v-else-if="!resultGroups.length && selectedCameraKey !== null"
+          title="该摄像头没有可展示的候选"
+          hint="点「全部摄像头」查看其他摄像头的结果。"
+        />
+        <EmptyState
+          v-else-if="!resultGroups.length"
           title="没有达到筛选条件的候选"
           hint="可以试试：换一张头到脚完整、光线清晰的单人全身图；或先点右上角「重建索引」补齐覆盖后再检索。"
         />
       </div>
-      <template v-if="results && results.length">
+      <template v-if="resultGroups.length">
         <section v-for="group in resultGroups" :key="group.key" class="reid-camera-group">
           <h3>
             {{ group.camera }}
             <small v-if="group.location">{{ group.location }}</small>
-            <em>{{ group.items.length }} 次出现 · {{ group.frames }} 帧</em>
+            <em>{{ group.items.length ? `${group.items.length} 次出现 · ${group.frames} 帧` : "无候选" }}</em>
           </h3>
-          <div class="media-grid">
+          <p v-if="!group.items.length && faceOnlyMode" class="muted-text reid-empty-camera">
+            这个摄像头没有人脸证据支持的候选；关闭「仅看人脸确认结果」可查看人体线索。
+          </p>
+          <p v-else-if="!group.items.length" class="muted-text reid-empty-camera">
+            这个摄像头当前没有可展示的候选；候选池可能未覆盖该摄像头，不代表这个人没有到访。
+          </p>
+          <div v-else class="media-grid">
             <article v-for="item in group.items" :key="item.crop_id" class="media-item">
           <div class="reid-thumb">
             <button
-              v-if="item.crop_url || item.image_url"
+              v-if="itemImageUrl(item)"
               class="image-zoom-trigger"
               type="button"
               aria-label="放大查看候选裁剪"
               title="点击放大"
               @click="
                 enlargeImage(
-                  item.crop_url || item.image_url,
+                  itemImageUrl(item),
                   '候选裁剪',
                   `${item.camera_name || '未知摄像头'} · crop ${shortId(item.crop_id)} · 相似度 ${formatScore(item.score)}`,
                 )
               "
             >
               <img
-                :src="item.crop_url || item.image_url || undefined"
+                :src="itemImageUrl(item) || undefined"
                 alt="候选裁剪"
                 loading="lazy"
               />
@@ -790,6 +930,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="media-meta">
+            <p v-if="backfilledCropIds.has(item.crop_id)" class="muted-text reid-result-origin">
+              来自跨摄像头线索；人体相似不能确认到访。
+            </p>
             <ReidEvidenceSummary
               :item="item"
               :when="visitWhen(item)"
@@ -799,7 +942,7 @@ onBeforeUnmount(() => {
               v-if="resultsQueryCropId === activeQueryCropId && resultsQueryCropId"
               :value="feedbackValue(item.crop_id)"
               :saving="feedbackIsSaving(item.crop_id)"
-              @choose="saveFeedback(item, $event, 'search')"
+              @choose="saveResultFeedback(item, $event)"
             />
           </div>
             </article>

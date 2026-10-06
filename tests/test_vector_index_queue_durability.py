@@ -56,9 +56,7 @@ def _enqueue_and_claim(queue, SessionLocal, settings, target: str, object_id: uu
     return jobs[0]
 
 
-def test_legacy_running_job_without_lease_is_recovered_during_schema_upgrade(
-    monkeypatch, tmp_path
-):
+def test_legacy_running_job_without_lease_is_recovered_during_schema_upgrade(monkeypatch, tmp_path):
     main = load_app(monkeypatch, tmp_path, "legacy-running-lease", **VL_ENV)
 
     from app.config.settings import get_settings
@@ -388,7 +386,9 @@ def test_capacity_reservation_serializes_two_transactions(monkeypatch, tmp_path)
         assert db.query(VectorIndexJob).filter_by(status="pending").count() == 1
 
 
-def test_process_endpoint_reports_full_outbox_and_does_not_commit_crop(monkeypatch, tmp_path):
+def test_process_endpoint_reports_full_outbox_and_does_not_commit_crop(
+    monkeypatch, tmp_path, sample_jpeg
+):
     main = load_app(
         monkeypatch,
         tmp_path,
@@ -415,7 +415,7 @@ def test_process_endpoint_reports_full_outbox_and_does_not_commit_crop(monkeypat
             db.commit()
         upload = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
+            files={"file": ("frame.jpg", sample_jpeg, "image/jpeg")},
         )
         assert upload.status_code == 200
         response = client.post(f"/api/images/{upload.json()['id']}/process")
@@ -465,7 +465,7 @@ def test_image_upload_reports_full_outbox_and_removes_upload(monkeypatch, tmp_pa
     assert list((tmp_path / "data" / "uploads").glob("*")) == []
 
 
-def test_synchronous_ingest_commits_image_and_crop_markers(monkeypatch, tmp_path):
+def test_synchronous_ingest_commits_image_and_crop_markers(monkeypatch, tmp_path, sample_jpeg):
     sync_env = {
         **VL_ENV,
         "VECTOR_INDEX_ON_INGEST_BACKGROUND": "false",
@@ -496,7 +496,7 @@ def test_synchronous_ingest_commits_image_and_crop_markers(monkeypatch, tmp_path
     with TestClient(main.create_app()) as client:
         upload = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
+            files={"file": ("frame.jpg", sample_jpeg, "image/jpeg")},
         )
         assert upload.status_code == 200
         process = client.post(f"/api/images/{upload.json()['id']}/process")
@@ -505,8 +505,7 @@ def test_synchronous_ingest_commits_image_and_crop_markers(monkeypatch, tmp_path
 
     with SessionLocal() as db:
         markers = {
-            (marker.object_type, str(marker.object_id))
-            for marker in db.query(VLEmbedding).all()
+            (marker.object_type, str(marker.object_id)) for marker in db.query(VLEmbedding).all()
         }
         assert db.query(VectorIndexJob).count() == 0
 
@@ -584,9 +583,7 @@ def test_stale_owner_cannot_ack_after_expired_job_is_reclaimed(monkeypatch, tmp_
     settings = get_settings()
     crop_id = _create_crop(SessionLocal)
     worker_a = VectorIndexQueue()
-    stale_claim = _enqueue_and_claim(
-        worker_a, SessionLocal, settings, "person_crop", crop_id
-    )
+    stale_claim = _enqueue_and_claim(worker_a, SessionLocal, settings, "person_crop", crop_id)
     with SessionLocal() as db:
         row = db.get(VectorIndexJob, stale_claim.id)
         row.lease_expires_at = local_now(settings) - timedelta(seconds=1)
@@ -620,9 +617,7 @@ def test_stale_owner_cannot_requeue_after_expired_job_is_reclaimed(monkeypatch, 
     settings = get_settings()
     crop_id = _create_crop(SessionLocal)
     worker_a = VectorIndexQueue()
-    stale_claim = _enqueue_and_claim(
-        worker_a, SessionLocal, settings, "person_crop", crop_id
-    )
+    stale_claim = _enqueue_and_claim(worker_a, SessionLocal, settings, "person_crop", crop_id)
     with SessionLocal() as db:
         row = db.get(VectorIndexJob, stale_claim.id)
         assert row is not None
@@ -726,16 +721,12 @@ def test_reid_split_rethrows_non_input_error(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ReidEmbeddingService,
         "embed_images",
-        lambda self, paths: (_ for _ in ()).throw(
-            ReidRuntimeError("bad batch", status_code=422)
-        ),
+        lambda self, paths: (_ for _ in ()).throw(ReidRuntimeError("bad batch", status_code=422)),
     )
     monkeypatch.setattr(
         ReidEmbeddingService,
         "embed_image",
-        lambda self, path: (_ for _ in ()).throw(
-            ReidRuntimeError("rate limited", status_code=429)
-        ),
+        lambda self, path: (_ for _ in ()).throw(ReidRuntimeError("rate limited", status_code=429)),
     )
 
     with SessionLocal() as db:

@@ -477,6 +477,7 @@ def _collapse(
             ranking.get(item.crop_id, item.score),
             query_camera=query_camera,
             chance_ceiling=settings.reid_chance_ceiling,
+            settings=settings,
         )
     return _reserve_camera_slots(
         grouped,
@@ -895,9 +896,7 @@ def reid_camera_links(
         uuid.UUID | None,
         tuple[tuple[int, float, float], ReidMatchItem],
     ] = {}
-    linked_items, attribute_bonus = _filter_by_attributes(
-        db, settings, raw_items, query_attributes
-    )
+    linked_items, attribute_bonus = _filter_by_attributes(db, settings, raw_items, query_attributes)
     linked_items = [
         item
         for item in linked_items
@@ -964,6 +963,7 @@ def reid_camera_links(
             appearance_score,
             query_camera=crop.camera_id,
             chance_ceiling=settings.reid_chance_ceiling,
+            settings=settings,
             is_camera_link=True,
         )
         current = best.get(item.camera_id)
@@ -980,6 +980,7 @@ def reid_camera_links(
             person_id=item.person_id,
             person_name=item.person_name,
             person_is_vip=item.person_is_vip,
+            calibrated_match_probability=item.calibrated_match_probability,
             score=item.score,
             stature_agreement=item.stature_agreement,
             attribute_agreement=item.attribute_agreement,

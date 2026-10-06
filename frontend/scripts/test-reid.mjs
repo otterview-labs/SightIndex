@@ -45,7 +45,7 @@ function loadModule(filename, mocks = {}, inlineTemplate = false) {
   return module.exports;
 }
 
-async function view(t, apiOverrides = {}) {
+async function view(t, apiOverrides = {}, cameraRows = []) {
   const oldDocument = globalThis.document;
   const oldWindow = globalThis.window;
   globalThis.document = { documentElement: { style: { overflow: "" } }, activeElement: null };
@@ -61,7 +61,11 @@ async function view(t, apiOverrides = {}) {
   };
   const mocks = {
     "vue-router": { useRoute: () => ({ query: {} }), RouterLink: {} },
-    "@/api/client": { crops: { get: async (id) => ({ id, crop_url: `/crop/${id}` }) }, reid: api },
+    "@/api/client": {
+      crops: { get: async (id) => ({ id, crop_url: `/crop/${id}` }) },
+      reid: api,
+      streams: { list: async () => cameraRows },
+    },
     "@/composables/useToast": { useToast: () => ({ showError() {}, toast() {} }) },
   };
   const component = loadModule(`${root}views/ReidView.vue`, mocks).default;
@@ -113,14 +117,128 @@ test("an uploaded image cannot display results from the URL's old crop", async (
 });
 
 test("camera groups preserve server face-first ranking, not just numeric scores", async (t) => {
-  const state = await view(t);
+  const state = await view(t, {}, [
+    { camera_id: "A", name: "Door A" },
+    { camera_id: "B", name: "Door B" },
+    { camera_id: "C", name: "Door C" },
+    { camera_id: "C", name: "Duplicate stream for C" },
+  ]);
   state.results.value = [
     { crop_id: "face", camera_id: "B", score: 0.46, fusion_score: 0.51, face_match: true },
     { crop_id: "body", camera_id: "A", score: 0.96, fusion_score: 0.96 },
     { crop_id: "second-B", camera_id: "B", score: 0.45, fusion_score: 0.45 },
   ];
-  assert.deepEqual(state.resultGroups.value.map((group) => group.key), ["B", "A"]);
+  assert.deepEqual(state.resultGroups.value.map((group) => group.key), ["B", "A", "C"]);
   assert.deepEqual(state.resultGroups.value[0].items.map((item) => item.crop_id), ["face", "second-B"]);
+  assert.equal(state.resultGroups.value[2].camera, "Door C");
+  assert.deepEqual(state.resultGroups.value[2].items, []);
+});
+
+test("registered cameras become empty cards only after a successful search", async (t) => {
+  const state = await view(t, {}, [{ camera_id: "A", name: "Door A" }]);
+  assert.deepEqual(state.resultGroups.value, []);
+  state.results.value = [];
+  assert.deepEqual(state.resultGroups.value.map((group) => [group.key, group.frames, group.items.length]), [["A", 0, 0]]);
+  assert.equal(state.resultSummary.value, "0 条");
+});
+
+test("camera filtering covers search results and cross-camera clues together", async (t) => {
+  const state = await view(t, {}, [
+    { camera_id: "A", name: "Door A" }, { camera_id: "B", name: "Door B" },
+    { camera_id: "C", name: "Door C" },
+  ]);
+  state.results.value = [{ crop_id: "search-A", camera_id: "A", score: 0.9, frame_count: 3 }];
+  state.cameraLinks.value = { links: [
+    { crop_id: "link-B", camera_id: "B", score: 0.2, beats_chance: false, evidence_level: "clue" },
+  ] };
+  assert.deepEqual(state.resultGroups.value.map((group) => group.key), ["A", "B", "C"]);
+  assert.deepEqual(state.resultGroups.value[1].items.map((item) => item.crop_id), ["link-B"]);
+  assert.equal(state.resultSummary.value, "2 次出现 · 4 帧");
+  state.selectedCameraKey.value = "B";
+  assert.deepEqual(state.resultGroups.value.map((group) => group.key), ["B"]);
+  assert.deepEqual(state.visibleCameraLinks.value.map((item) => item.crop_id), ["link-B"]);
+  assert.equal(state.resultSummary.value, "1 条（已按摄像头筛选）");
+  state.selectedCameraKey.value = "C";
+  assert.deepEqual(state.resultGroups.value[0].items, []);
+  assert.deepEqual(state.visibleCameraLinks.value, []);
+});
+
+test("face-only mode preserves empty cameras and excludes unverified borrowed faces", async (t) => {
+  const state = await view(t, {}, [{ camera_id: "A", name: "Door A" }, { camera_id: "B", name: "Door B" }]);
+  state.results.value = [
+    { crop_id: "supported", camera_id: "A", score: 0.4, face_match: true, frame_count: 2 },
+    { crop_id: "body-only", camera_id: "A", score: 0.99 },
+    { crop_id: "borrowed", camera_id: "A", score: 0.7, face_match: true, face_candidate_identity_verified: false },
+    { crop_id: "query-unverified", camera_id: "A", score: 0.7, face_match: true, face_query_identity_verified: false },
+    { crop_id: "rejected", camera_id: "A", score: 0.8, face_match: true, evidence_level: "rejected" },
+  ];
+  state.cameraLinks.value = { links: [
+    { crop_id: "weak", camera_id: "B", score: 0.2, beats_chance: false, evidence_level: "clue" },
+  ] };
+  state.faceOnlyMode.value = true;
+  assert.deepEqual(state.resultGroups.value.map((group) => group.key), ["A", "B"]);
+  assert.deepEqual(state.resultGroups.value[0].items.map((item) => item.crop_id), ["supported"]);
+  assert.equal(state.resultGroups.value[0].frames, 2);
+  assert.deepEqual(state.resultGroups.value[1].items, []);
+  assert.deepEqual(state.visibleCameraLinks.value, []);
+  assert.equal(state.resultSummary.value, "1 次出现 · 2 帧");
+});
+
+test("a search camera is not duplicated by its link and rejected links never fill a card", async (t) => {
+  const state = await view(t, {}, [{ camera_id: "C", name: "Door C" }]);
+  state.results.value = [{ crop_id: "search-A", camera_id: "A", score: 0.9 }];
+  state.cameraLinks.value = { links: [
+    { crop_id: "another-A", camera_id: "A", score: 0.7, beats_chance: true },
+    { crop_id: "rejected-C", camera_id: "C", score: 0.9, face_match: false, evidence_level: "rejected" },
+  ] };
+  assert.deepEqual(state.resultGroups.value[0].items.map((item) => item.crop_id), ["search-A"]);
+  assert.deepEqual(state.resultGroups.value[1].items, []);
+  assert.deepEqual([...state.backfilledCropIds.value], []);
+});
+
+test("hiding weak clues removes them from both lists while keeping registered empty cards", async (t) => {
+  const state = await view(t, {}, [{ camera_id: "B", name: "Door B" }]);
+  state.results.value = [];
+  state.cameraLinks.value = { links: [{ crop_id: "weak-B", camera_id: "B", score: 0.2, beats_chance: false, evidence_level: "clue" }] };
+  state.showWeakCameraLinks.value = false;
+  assert.deepEqual(state.visibleCameraLinks.value, []);
+  assert.deepEqual(state.resultGroups.value[0].items, []);
+  assert.equal(state.cameraFilterOptions.value[0].key, "B");
+});
+
+test("feedback on a clue merged into the main list keeps its camera-link source", async (t) => {
+  const saved = [];
+  const state = await view(t, { saveFeedback: async (row) => { saved.push(row); return row; } });
+  await state.activateSourceCrop("query");
+  const match = { crop_id: "search-A", camera_id: "A", score: 0.9 };
+  const clue = { crop_id: "link-B", camera_id: "B", score: 0.2, beats_chance: false, evidence_level: "clue" };
+  state.results.value = [match];
+  state.resultsQueryCropId.value = "query";
+  state.cameraLinks.value = { links: [clue] };
+  await state.saveResultFeedback(clue, false);
+  await state.saveResultFeedback(match, true);
+  assert.deepEqual(saved.map((row) => [row.candidate_crop_id, row.source]), [["link-B", "camera_link"], ["search-A", "search"]]);
+});
+
+test("new queries clear camera selection and preserve the face-only viewing preference", async (t) => {
+  const state = await view(t);
+  state.selectedCameraKey.value = "A";
+  state.faceOnlyMode.value = true;
+  state.onFileChange(new File(["synthetic"], "new-query.jpg"));
+  assert.equal(state.selectedCameraKey.value, null);
+  assert.equal(state.faceOnlyMode.value, true);
+  state.selectedCameraKey.value = "B";
+  await state.activateSourceCrop("another-query");
+  assert.equal(state.selectedCameraKey.value, null);
+  assert.equal(state.faceOnlyMode.value, true);
+});
+
+test("clues on another day prevent a misleading single-day heading", async (t) => {
+  const state = await view(t);
+  state.results.value = [{ crop_id: "search-A", camera_id: "A", score: 0.9, captured_at: "2026-09-05T04:00:00Z" }];
+  state.cameraLinks.value = { links: [{ crop_id: "link-B", camera_id: "B", score: 0.2, beats_chance: false, captured_at: "2026-09-06T04:00:00Z" }] };
+  assert.equal(state.singleDay.value, "");
+  assert.match(state.visitWhen(state.cameraLinks.value.links[0]), /09\/06/);
 });
 
 test("leaving and revisiting a crop ignores feedback from the earlier visit", async (t) => {

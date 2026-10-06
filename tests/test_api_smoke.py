@@ -136,9 +136,7 @@ def test_embedding_endpoints_require_basic_auth_without_a_service_key(
     with TestClient(main.create_app()) as client:
         assert client.post(endpoint, json={}).status_code == 401
         token = b64encode(b"viewer:secret").decode("ascii")
-        response = client.post(
-            endpoint, json={}, headers={"Authorization": f"Basic {token}"}
-        )
+        response = client.post(endpoint, json={}, headers={"Authorization": f"Basic {token}"})
         assert response.status_code == 422
 
 
@@ -828,9 +826,9 @@ def test_chat_returns_named_person_trajectory(monkeypatch, tmp_path):
     assert payload["data"]["person"]["name"] == "张三"
     assert payload["data"]["person"]["department"] == "研发部"
     assert payload["data"]["person"]["phone"] == "13800000000"
-    assert {"key": "department", "label": "部门", "value": "研发部"} in payload["data"][
-        "person"
-    ]["tags"]
+    assert {"key": "department", "label": "部门", "value": "研发部"} in payload["data"]["person"][
+        "tags"
+    ]
     assert payload["data"]["items"][0]["crop_url"] == "/data/crops/zhangsan.jpg"
     assert payload["data"]["items"][0]["match_source"] == "face"
     assert payload["data"]["items"][0]["location"]["location_id"] == str(location_id)
@@ -1003,12 +1001,12 @@ def test_chat_reports_person_today_work_time_from_face_library(monkeypatch, tmp_
     assert payload["data"]["person"]["employee_no"] == "E001"
     assert payload["data"]["person"]["department"] == "安保部"
     assert payload["data"]["person"]["phone"] == "13900000000"
-    assert {"key": "employee_no", "label": "工号", "value": "E001"} in payload["data"][
-        "person"
-    ]["tags"]
-    assert {"key": "department", "label": "部门", "value": "安保部"} in payload["data"][
-        "person"
-    ]["tags"]
+    assert {"key": "employee_no", "label": "工号", "value": "E001"} in payload["data"]["person"][
+        "tags"
+    ]
+    assert {"key": "department", "label": "部门", "value": "安保部"} in payload["data"]["person"][
+        "tags"
+    ]
     assert payload["data"]["source"] == "face"
     assert payload["data"]["appearance_count"] == 2
     assert payload["data"]["first_appearance"]["crop_url"] == "/data/crops/work-first.jpg"
@@ -1101,7 +1099,6 @@ def test_chat_visual_count_routes_to_strict_structured_search(monkeypatch, tmp_p
     assert "返回 0 个" in payload["answer"]
     assert payload["data"]["items"] == []
     assert captured == {}
-
 
 
 def test_chat_does_not_use_generic_clip_image_search(monkeypatch, tmp_path):
@@ -1203,9 +1200,7 @@ def test_chat_structured_search_uses_person_crop_attributes(monkeypatch, tmp_pat
     assert len(payload["data"]["items"]) == 1
     assert payload["data"]["items"][0]["crop_id"] == str(bald_crop_id)
     assert payload["data"]["items"][0]["attributes"]["appearance"]["hair"] == "bald"
-    assert payload["data"]["conditions"] == [
-        {"field": "hair", "values": ["bald", "shaved"]}
-    ]
+    assert payload["data"]["conditions"] == [{"field": "hair", "values": ["bald", "shaved"]}]
     assert [call["name"] for call in payload["tool_calls"]] == ["search_structured"]
 
 
@@ -1415,12 +1410,12 @@ def test_visual_rerank_endpoint(monkeypatch, tmp_path):
     }
 
 
-def test_image_upload(monkeypatch, tmp_path):
+def test_image_upload(monkeypatch, tmp_path, sample_jpeg):
     main = load_app(monkeypatch, tmp_path, "test-upload")
     with TestClient(main.create_app()) as client:
         response = client.post(
             "/api/images/upload",
-            files={"file": ("sample.jpg", _sample_image_bytes(), "image/jpeg")},
+            files={"file": ("sample.jpg", sample_jpeg, "image/jpeg")},
         )
     assert response.status_code == 200
     payload = response.json()
@@ -1688,9 +1683,7 @@ def test_visual_search_does_not_run_vector_when_structured_matches(monkeypatch, 
     assert response.status_code == 200
     payload = response.json()
     assert vector_calls["count"] == 0
-    assert [item["crop_url"] for item in payload["items"]] == [
-        "/data/crops/structured.jpg"
-    ]
+    assert [item["crop_url"] for item in payload["items"]] == ["/data/crops/structured.jpg"]
     assert payload["items"][0]["score"] == 1.0
 
 
@@ -1977,12 +1970,8 @@ def test_vlm_rerank_scores_candidates_concurrently(monkeypatch, tmp_path):
 
     monkeypatch.setattr(VLMRerankService, "rerank_image", fake_rerank_image)
 
-    items = [
-        SearchResultItem(crop_url=f"/data/crops/{name}.jpg", score=0.1) for name in names
-    ]
-    reranked = VLMRerankService(get_settings()).rerank_person_crops(
-        "红衣戴帽的人", items, limit=3
-    )
+    items = [SearchResultItem(crop_url=f"/data/crops/{name}.jpg", score=0.1) for name in names]
+    reranked = VLMRerankService(get_settings()).rerank_person_crops("红衣戴帽的人", items, limit=3)
 
     assert [item.crop_url for item in reranked] == [
         "/data/crops/b.jpg",
@@ -2128,9 +2117,7 @@ def test_face_library_cache_matches_full_scan_and_reloads_after_enrollment(monke
         carol = Person(name="carol")
         db.add(carol)
         db.flush()
-        db.add(
-            FaceEmbedding(person_id=carol.id, embedding=unit(0.95, 0.05, 0.0), face_model="m")
-        )
+        db.add(FaceEmbedding(person_id=carol.id, embedding=unit(0.95, 0.05, 0.0), face_model="m"))
         db.commit()
         faces_module.invalidate_face_library_cache()
 
@@ -2827,9 +2814,7 @@ def test_person_trajectory_backfills_face_recognition_when_no_events(monkeypatch
         fast_response = client.get(f"/api/persons/{person_id}/trajectory")
         assert calls["count"] == 0
 
-        response = client.get(
-            f"/api/persons/{person_id}/trajectory?backfill_missing=true"
-        )
+        response = client.get(f"/api/persons/{person_id}/trajectory?backfill_missing=true")
 
     assert vector_only_response.status_code == 200
     assert vector_only_response.json()["items"] == []
@@ -3049,7 +3034,7 @@ def test_explicit_face_rebuild_marks_crop_without_face(monkeypatch, tmp_path):
 
 
 def test_visual_search_does_not_fallback_to_score_zero_when_vector_provider_fails(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, sample_jpeg
 ):
     monkeypatch.setenv("MILVUS_ENABLED", "true")
     monkeypatch.setenv("VISUAL_EMBEDDING_PROVIDER", "qwen3_vl_http")
@@ -3059,7 +3044,7 @@ def test_visual_search_does_not_fallback_to_score_zero_when_vector_provider_fail
     with TestClient(main.create_app()) as client:
         upload_response = client.post(
             "/api/images/upload",
-            files={"file": ("sample.jpg", _sample_image_bytes(), "image/jpeg")},
+            files={"file": ("sample.jpg", sample_jpeg, "image/jpeg")},
         )
         assert upload_response.status_code == 200
 
@@ -3132,9 +3117,7 @@ def test_video_upload_processes_frames(monkeypatch, tmp_path):
         assert annotated_path.exists()
 
 
-def test_video_upload_queue_full_returns_503_with_exact_partial_progress(
-    monkeypatch, tmp_path
-):
+def test_video_upload_queue_full_returns_503_with_exact_partial_progress(monkeypatch, tmp_path):
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     video_path = tmp_path / "sample-backpressure.avi"
@@ -3581,9 +3564,7 @@ def test_stream_runtime_indexes_created_frame_when_enabled(monkeypatch, tmp_path
     assert indexed == [image_id]
 
 
-def test_stream_runtime_rolls_back_queue_full_and_processes_next_frame(
-    monkeypatch, tmp_path
-):
+def test_stream_runtime_rolls_back_queue_full_and_processes_next_frame(monkeypatch, tmp_path):
     monkeypatch.setenv("STREAM_WARMUP_FRAMES", "0")
     main = load_app(monkeypatch, tmp_path, "test-stream-queue-backpressure")
     from app.db.session import SessionLocal
@@ -3640,9 +3621,7 @@ def test_stream_runtime_rolls_back_queue_full_and_processes_next_frame(
     monkeypatch.setattr(runtime, "_write_frame_file", write_frame)
     # A detection needs a bbox now: visit de-duplication reads it to decide whether this body
     # was already stored earlier in the same visit.
-    fake_detection = Detection(
-        bbox={"x": 10, "y": 20, "width": 60, "height": 140}, confidence=0.9
-    )
+    fake_detection = Detection(bbox={"x": 10, "y": 20, "width": 60, "height": 140}, confidence=0.9)
     monkeypatch.setattr(
         FrameProcessingService,
         "detect_image_path",
@@ -3743,9 +3722,7 @@ def test_stream_runtime_releases_capture_on_read_timeout(monkeypatch, tmp_path):
     stop_event = threading.Event()
     errors = []
 
-    monkeypatch.setattr(
-        "app.services.stream_runtime.CaptureProcess", lambda *args: capture
-    )
+    monkeypatch.setattr("app.services.stream_runtime.CaptureProcess", lambda *args: capture)
     original_set_stream_error = runtime._set_stream_error
 
     def record_and_stop(db, stream, message, status="error"):

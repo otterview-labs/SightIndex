@@ -105,9 +105,7 @@ def test_video_processing_counts_two_visitors_separated_by_empty_frames(monkeypa
     from app.services.video_processing import CountingLine, VideoProcessingService
 
     video_path = tmp_path / "synthetic.avi"
-    writer = cv2.VideoWriter(
-        str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 1.0, (100, 100)
-    )
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 1.0, (100, 100))
     if not writer.isOpened():
         pytest.skip("OpenCV MJPG encoder is unavailable")
     try:

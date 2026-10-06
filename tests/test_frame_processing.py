@@ -252,15 +252,17 @@ def test_the_confidence_floor_drops_low_scoring_detections(tmp_path):
     )
     box = {"x": 0, "y": 0, "width": 200, "height": 400}
 
-    kept = service.quality_filter_detections([
-        Detection(bbox=box, confidence=0.42),
-        Detection(bbox=box, confidence=0.93),
-    ])
+    kept = service.quality_filter_detections(
+        [
+            Detection(bbox=box, confidence=0.42),
+            Detection(bbox=box, confidence=0.93),
+        ]
+    )
 
     assert [d.confidence for d in kept] == [0.93]
 
 
-def test_crop_write_failure_cleans_only_files_from_this_attempt(monkeypatch, tmp_path):
+def test_enqueue_failure_cleans_only_files_from_this_attempt(monkeypatch, tmp_path):
     from unittest.mock import MagicMock
 
     settings = Settings(
@@ -296,14 +298,19 @@ def test_crop_write_failure_cleans_only_files_from_this_attempt(monkeypatch, tmp
         annotation.write_bytes(b"annotation")
         return "/data/thumbnails/new.jpg"
 
+    def fail_enqueue(*args):
+        raise RuntimeError("simulated outbox failure")
+
     monkeypatch.setattr(service, "_try_crop_with_cv2", write_crop)
     monkeypatch.setattr(service, "_create_annotated_frame_file", annotate)
     monkeypatch.setattr(service, "_read_image_size", lambda url: (100, 100))
+    monkeypatch.setattr(service, "_enqueue_index_jobs", fail_enqueue)
     detection = Detection(bbox={"x": 1, "y": 1, "width": 50, "height": 80}, confidence=1.0)
 
-    with pytest.raises(OSError, match="simulated write failure"):
+    with pytest.raises(RuntimeError, match="simulated outbox failure"):
         service.process_image(image, [detection, detection])
 
+    assert calls == 2
     assert list(settings.crops_dir.iterdir()) == [prior_crop]
     assert source.read_bytes() == b"existing"
     assert original_thumbnail.read_bytes() == b"existing"
@@ -324,12 +331,8 @@ def test_a_box_touching_the_frame_edge_is_dropped_as_an_incomplete_body(tmp_path
         db=None, settings=settings, detector=WholeFramePersonDetector()
     )
     frame_width, frame_height = 1280, 720
-    whole = Detection(
-        bbox={"x": 100, "y": 100, "width": 200, "height": 400}, confidence=0.9
-    )
-    touches_left = Detection(
-        bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9
-    )
+    whole = Detection(bbox={"x": 100, "y": 100, "width": 200, "height": 400}, confidence=0.9)
+    touches_left = Detection(bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9)
     touches_bottom = Detection(
         bbox={"x": 100, "y": frame_height - 400, "width": 200, "height": 400},
         confidence=0.9,
@@ -352,9 +355,7 @@ def test_the_whole_body_check_is_skipped_without_a_frame_size(tmp_path):
     service = FrameProcessingService(
         db=None, settings=settings, detector=WholeFramePersonDetector()
     )
-    touches_left = Detection(
-        bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9
-    )
+    touches_left = Detection(bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9)
 
     kept = service.quality_filter_detections([touches_left])
 
@@ -388,9 +389,7 @@ def test_the_whole_body_check_can_be_turned_off(tmp_path):
     service = FrameProcessingService(
         db=None, settings=settings, detector=WholeFramePersonDetector()
     )
-    touches_left = Detection(
-        bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9
-    )
+    touches_left = Detection(bbox={"x": 0, "y": 100, "width": 200, "height": 400}, confidence=0.9)
 
     kept = service.quality_filter_detections([touches_left], 1280, 720)
 

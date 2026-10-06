@@ -23,6 +23,7 @@ interface ReidEvidence {
   evidence_level?: string | null;
   decision_reason?: string | null;
   beats_chance?: boolean | null;
+  calibrated_match_probability?: number | null;
 }
 
 const props = defineProps<{
@@ -108,6 +109,13 @@ const faceText = computed(() => {
         <template v-if="item.beats_chance != null">
           <dt>巧合线</dt>
           <dd>{{ item.beats_chance ? "人体分高于参考线，仍需核对" : "人体分处于巧合区间，不能据此确认到访" }}</dd>
+        </template>
+        <template v-if="measured(item.calibrated_match_probability)">
+          <dt>已配置的跨摄像头标定估计</dt>
+          <dd>
+            约 {{ (item.calibrated_match_probability * 100).toFixed(2) }}%
+            （来自本部署配置的人体分标定，不是人脸与人体融合概率；有效性需独立验证）
+          </dd>
         </template>
         <template v-if="measured(item.fusion_score)">
           <dt>融合分</dt><dd>{{ score(item.fusion_score) }}，非概率；可靠人脸结论优先于数值分</dd>

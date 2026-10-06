@@ -1,16 +1,36 @@
 import uuid
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
 from fastapi import UploadFile
 
 from app.config.settings import Settings
 
+if TYPE_CHECKING:
+    from PIL import Image
+
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"})
 VIDEO_SUFFIXES = frozenset(
     {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v", ".mpeg", ".mpg", ".ts"}
 )
+
+
+def _open_supported_image(source: BinaryIO) -> "Image.Image":
+    """Use Pillow's decoder without invoking Ultralytics' auto-installing wrapper."""
+    from PIL import Image
+
+    opener = Image.open
+    if getattr(opener, "__module__", None) == "ultralytics.utils.patches":
+        opener = getattr(opener, "__globals__", {}).get("_image_open")
+    if (
+        not callable(opener)
+        or getattr(opener, "__module__", None) != "PIL.Image"
+        or getattr(opener, "__name__", None) != "open"
+        or getattr(opener, "__globals__", None) is not vars(Image)
+    ):
+        raise ValueError("Native Pillow image decoder is unavailable")
+    return opener(source, formats=["JPEG", "PNG", "WEBP", "BMP", "GIF"])
 
 
 class InvalidUploadError(Exception):
@@ -49,7 +69,7 @@ class StorageService:
             self._copy_limited(file.file, source, limit)
             source.seek(0)
             try:
-                with Image.open(source, formats=["JPEG", "PNG", "WEBP", "BMP", "GIF"]) as image:
+                with _open_supported_image(source) as image:
                     if image.width * image.height > self.settings.upload_image_max_pixels:
                         raise InvalidUploadError("Image exceeds the pixel limit", 413)
                     image.load()

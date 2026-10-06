@@ -6,7 +6,6 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
-from test_api_smoke import _sample_image_bytes
 
 
 def load_app(monkeypatch, tmp_path, name: str, **env: str):
@@ -21,7 +20,7 @@ def load_app(monkeypatch, tmp_path, name: str, **env: str):
     return importlib.import_module("main")
 
 
-def test_reid_ingest_enqueues_with_vl_indexing_off(monkeypatch, tmp_path):
+def test_reid_ingest_enqueues_with_vl_indexing_off(monkeypatch, tmp_path, sample_jpeg):
     """ReID ingest must run on its own flags; VL indexing being off cannot suppress it."""
 
     main = load_app(
@@ -44,7 +43,7 @@ def test_reid_ingest_enqueues_with_vl_indexing_off(monkeypatch, tmp_path):
     with TestClient(main.create_app()) as client:
         upload = client.post(
             "/api/images/upload",
-            files={"file": ("frame.jpg", _sample_image_bytes(), "image/jpeg")},
+            files={"file": ("frame.jpg", sample_jpeg, "image/jpeg")},
         )
         assert upload.status_code == 200
         process = client.post(f"/api/images/{upload.json()['id']}/process")
@@ -140,9 +139,7 @@ def test_reid_queue_batches_and_isolates_missing_files(monkeypatch, tmp_path):
 
     with SessionLocal() as db:
         remaining = {str(job.object_id): job for job in db.query(VectorIndexJob).all()}
-        markers = list(
-            db.query(VLEmbedding).filter(VLEmbedding.object_type == "reid_person_crop")
-        )
+        markers = list(db.query(VLEmbedding).filter(VLEmbedding.object_type == "reid_person_crop"))
     # Indexed jobs are gone; the missing-file job stays for retry with the reason recorded.
     assert set(remaining) == {str(ids["gone"])}
     assert remaining[str(ids["gone"])].attempts == 1
@@ -216,9 +213,7 @@ def test_model_switch_requeues_and_replaces_markers(monkeypatch, tmp_path):
         db.commit()
         assert new.pending_count() == 0
 
-        markers = list(
-            db.query(VLEmbedding).filter(VLEmbedding.object_type == "reid_person_crop")
-        )
+        markers = list(db.query(VLEmbedding).filter(VLEmbedding.object_type == "reid_person_crop"))
     # The stale marker was replaced, not accumulated.
     assert len(markers) == 1
     assert markers[0].embedding_model.startswith("sapiensid_wb4m|")

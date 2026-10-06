@@ -14,6 +14,7 @@ from app.db.session import SessionLocal
 from app.models.media import Image, VideoStream
 from app.services.appearance_tracker import AppearanceTracker
 from app.services.capture_process import CaptureProcess
+from app.services.crop_quality import measure_person_roi
 from app.services.frame_processing import Detection, FrameProcessingService
 from app.services.time_utils import local_now
 from app.services.vector_index_queue import VectorQueueFullError
@@ -116,6 +117,9 @@ class StreamRuntime:
                 match_distance=settings.person_crop_visit_match_distance,
                 idle_seconds=settings.person_crop_visit_idle_seconds,
                 max_seconds=settings.person_crop_visit_max_seconds,
+                max_samples_per_visit=settings.person_crop_visit_max_samples,
+                min_sample_interval_seconds=settings.person_crop_visit_sample_interval_seconds,
+                quality_improvement_ratio=settings.person_crop_visit_quality_improvement_ratio,
             )
             previous_frame_reference = None
             warmup_frames_remaining = int(settings.stream_warmup_frames)
@@ -212,8 +216,7 @@ class StreamRuntime:
                     if counting_line is not None:
                         crossings = []
                         tracks_before_crossing = {
-                            track_id: replace(track)
-                            for track_id, track in tracks.items()
+                            track_id: replace(track) for track_id, track in tracks.items()
                         }
                         next_track_id_before_crossing = next_track_id
                         count_service = VideoProcessingService(db, settings)
@@ -223,7 +226,11 @@ class StreamRuntime:
                             line=counting_line,
                             tracks=tracks,
                             next_track_id=next_track_id,
-                            observed_at=captured_at.timestamp(),
+                            now=time.monotonic(),
+                            max_idle_seconds=max(
+                                settings.line_crossing_track_idle_seconds,
+                                stream.frame_interval_seconds * 2.0,
+                            ),
                         )
                         if not crossings:
                             reason = self._skip_reason(raw_detections, detections)
@@ -245,7 +252,11 @@ class StreamRuntime:
 
                         image = self._create_frame_image(db, stream, frame_url, captured_at)
                         crossing_detections = [
-                            detections[crossing.detection_index] for crossing in crossings
+                            replace(
+                                detections[crossing.detection_index],
+                                source_index=crossing.detection_index,
+                            )
+                            for crossing in crossings
                         ]
                         try:
                             crops = processor.process_image(image, detections=crossing_detections)
@@ -269,10 +280,7 @@ class StreamRuntime:
                             stop_event.wait(backoff_seconds)
                             continue
                         self._try_index_frame_image(db, image, settings)
-                        crops_by_detection_index = {
-                            crossing.detection_index: crop
-                            for crossing, crop in zip(crossings, crops, strict=False)
-                        }
+                        crops_by_detection_index = count_service._crops_by_detection_index(crops)
                         count_service._create_line_crossing_events(
                             crossings=crossings,
                             crops_by_detection_index=crops_by_detection_index,
@@ -344,6 +352,16 @@ class StreamRuntime:
                             )
                             stop_event.wait(backoff_seconds)
                             continue
+                        if settings.person_crop_dedupe_enabled:
+                            saved_tokens = {
+                                crop.bbox["sampling_visit_token"]
+                                for crop in crops
+                                if isinstance(crop.bbox.get("sampling_visit_token"), str)
+                            }
+                            attempted_tokens = set(visits.retained_tokens().values())
+                            visits.rollback_retained(
+                                attempted_tokens - saved_tokens, visits_before_frame
+                            )
                         self._try_index_frame_image(db, image, settings)
                         stream.last_frame_image_id = image.id
                         stream.status = "running"
@@ -404,10 +422,12 @@ class StreamRuntime:
         frame: object,
         visits: AppearanceTracker,
     ) -> list[Detection]:
-        """Drops the detections that repeat a body already stored during this visit."""
+        """Keep first sightings and bounded ROI-quality improvements, without identity claims."""
 
         height, width = frame.shape[:2]
         centers = []
+        qualities: list[float | None] = []
+        measured_detections: list[Detection] = []
         for detection in detections:
             bbox = detection.bbox
             x = float(bbox.get("x", 0))
@@ -417,8 +437,25 @@ class StreamRuntime:
             centers.append(
                 ((x + box_width / 2) / max(width, 1), (y + box_height / 2) / max(height, 1))
             )
-        started = visits.new_visits(centers, time.monotonic())
-        return [detections[index] for index in started]
+            quality = measure_person_roi(frame, bbox)
+            qualities.append(quality.score if quality is not None else None)
+            measured_detections.append(
+                replace(detection, bbox={**bbox, "roi_quality": quality.metadata()})
+                if quality is not None
+                else detection
+            )
+        retained = visits.new_visits(centers, time.monotonic(), qualities=qualities)
+        tokens = visits.retained_tokens()
+        return [
+            replace(
+                measured_detections[index],
+                bbox={
+                    **measured_detections[index].bbox,
+                    "sampling_visit_token": tokens[index],
+                },
+            )
+            for index in retained
+        ]
 
     def _write_frame_file(
         self, stream: VideoStream, frame: object, cv2: object

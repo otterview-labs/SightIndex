@@ -9,7 +9,7 @@ import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -27,6 +27,21 @@ EMBEDDING_DIM = 2048
 MAX_PIXELS = 768 * 32 * 32
 MAX_LENGTH = 4096
 SCRIPT_SHA256 = "8ffa74a1a6bb759610c57865ea416fd4daf9936cb787520e1112a3e1d547f36a"
+
+
+def _open_supported_image(source: BinaryIO) -> Image.Image:
+    """Bypass the known Ultralytics auto-installer without changing global Pillow state."""
+    opener = Image.open
+    if getattr(opener, "__module__", None) == "ultralytics.utils.patches":
+        opener = getattr(opener, "__globals__", {}).get("_image_open")
+    if (
+        not callable(opener)
+        or getattr(opener, "__module__", None) != "PIL.Image"
+        or getattr(opener, "__name__", None) != "open"
+        or getattr(opener, "__globals__", None) is not vars(Image)
+    ):
+        raise ValueError("Native Pillow image decoder is unavailable")
+    return opener(source, formats=["JPEG", "PNG", "WEBP", "BMP", "GIF"])
 
 
 class EmbeddingRequest(VisualEmbeddingRequest):
@@ -84,7 +99,7 @@ def decode_image(payload: str, settings: EmbeddingSettings) -> Image.Image:
     if len(data) > settings.upload_image_max_bytes:
         raise HTTPException(413, "Image exceeds the byte limit")
     try:
-        with Image.open(io.BytesIO(data), formats=["JPEG", "PNG", "WEBP", "BMP", "GIF"]) as image:
+        with _open_supported_image(io.BytesIO(data)) as image:
             if image.width * image.height > settings.upload_image_max_pixels:
                 raise HTTPException(413, "Image exceeds the pixel limit")
             image.load()

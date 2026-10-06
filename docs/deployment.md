@@ -715,3 +715,62 @@ HTTP 200 only proves the page is reachable. Also confirm:
 
 The adopted scope, rejected suggestions, and residual risks of this review round are recorded in
 `docs/reid-fable5-review-20260905.md`.
+
+### Capture quality and counting-track lifecycle
+
+The integrated capture fixes do not change the body model, body/face matching thresholds,
+preprocessing fingerprint, or vector namespace, and do not automatically rebuild old indexes.
+
+```dotenv
+PERSON_CROP_DEDUPE_ENABLED=true
+PERSON_CROP_VISIT_MAX_SAMPLES=3
+PERSON_CROP_VISIT_SAMPLE_INTERVAL_SECONDS=2.0
+PERSON_CROP_VISIT_QUALITY_IMPROVEMENT_RATIO=0.15
+LINE_CROSSING_TRACK_IDLE_SECONDS=6.0
+LINE_CROSSING_TRACK_MAX_MISSED_FRAMES=2
+```
+
+Without a counting line, deduplication retains the first usable detection and at most two
+additional frames whose native person-ROI quality clearly improves, subject to the sampling
+interval. Set `PERSON_CROP_VISIT_MAX_SAMPLES=1` to retain the former single-frame behavior.
+Measurements are stored in `bbox.roi_quality` and exclude padded background and display-only
+enhancement. This heuristic is a local frame-selection hint, not an identity probability or a
+guarantee of an unobstructed person or visible face. Unknown quality retains the single-frame
+behavior. Position-based visits are not verified identity tracks and never merge identities.
+
+Counting tracks expire on idle time or the configured consecutive missed-frame limit. Uploaded
+videos use media time; live streams use a monotonic clock. The idle window is at least twice the
+capture interval, so slow sampling does not clear valid tracks before the next observation.
+Empty detection frames also advance expiry. The former `COUNTING_TRACK_IDLE_SECONDS` setting
+remains a fallback alias; use `LINE_CROSSING_TRACK_IDLE_SECONDS` for new configurations.
+
+A failed crop is skipped instead of saving the entire scene as a person. Successful crops carry
+an explicit detection index, so one failure cannot shift the remaining crops onto another
+crossing event. Only files owned by the failed attempt are cleaned up. If all requested crops
+fail technically, the image remains retryable; genuine empty results are marked complete.
+Partial success is idempotent and failed stream samples restore only their own sampling budget.
+
+After deployment, verify ROI metadata, bounded visit samples, and crossing-to-crop association
+before evaluating retrieval on a fixed gallery with independent human labels. These changes
+improve input reliability but do not establish cross-camera ReID accuracy or recover good frames
+that were never saved. Do not rebuild historical vectors solely because of this capture patch.
+
+### Optional cross-camera calibration
+
+Cross-camera probability display is disabled unless both
+`REID_CROSS_CAMERA_CALIBRATION_COEF` and `REID_CROSS_CAMERA_CALIBRATION_INTERCEPT` are explicitly
+configured with finite deployment-specific values. Fit and validate them on representative
+labeled pairs, with the intended gallery and candidate-selection procedure; coefficients from
+another camera installation are not portable defaults. The display is an estimate from the
+configured body-score calibration, not a fused body/face probability, and never changes
+admission thresholds, ranking, or manual identity assignments. Same-camera and unknown-camera
+queries are outside this calibration and return no probability.
+
+### Image-decoder compatibility
+
+The upload API and standalone embedding container keep the explicit JPEG/PNG/WEBP/BMP/GIF
+allowlist and pixel/byte limits. If the detector library has wrapped Pillow's decoder with a
+plugin auto-installer, these endpoints validate and use the saved native Pillow decoder without
+running that wrapper or changing global decoder state. An unavailable or untrusted decoder is
+rejected through the normal invalid-image response; malformed uploads must not install packages
+or become successful inference requests.

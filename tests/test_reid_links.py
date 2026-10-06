@@ -129,6 +129,31 @@ def test_the_response_says_where_the_query_came_from(wired):
     assert payload["chance_ceiling"] == 0.44
 
 
+def test_camera_links_do_not_invent_a_default_calibration(wired):
+    client, ids, _ = wired
+    links = client.post(f"/api/reid/crops/{ids['query']}/links").json()["links"]
+    assert links
+    assert all(link["calibrated_match_probability"] is None for link in links)
+
+
+def test_camera_links_copy_the_configured_calibration_without_changing_candidates(wired):
+    from app.config.settings import get_settings
+    from app.services.reid_fusion import cross_camera_match_probability
+
+    client, ids, _ = wired
+    endpoint = f"/api/reid/crops/{ids['query']}/links"
+    original = client.post(endpoint).json()["links"]
+    settings = get_settings()
+    settings.reid_cross_camera_calibration_coef = 2.0
+    settings.reid_cross_camera_calibration_intercept = -1.0
+    links = client.post(endpoint).json()["links"]
+    assert [link["crop_id"] for link in links] == [link["crop_id"] for link in original]
+    for link in links:
+        estimate = cross_camera_match_probability(link["score"], settings)
+        assert estimate is not None
+        assert link["calibrated_match_probability"] == round(estimate, 5)
+
+
 def test_a_labelled_candidate_carries_its_name_into_the_link(monkeypatch, tmp_path):
     """ReidCameraLink has its own field list, separate from ReidMatchItem's: a name attached to
     the same underlying item is not free just because /similar already carries it."""

@@ -1,4 +1,5 @@
 import logging
+import math
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -351,17 +352,52 @@ def fusion_rank(
     )
 
 
+def cross_camera_match_probability(raw_score: float, settings: Settings) -> float | None:
+    """Return a configured body-score estimate, never an unconfigured identity probability.
+
+    A calibration fit is camera/gallery/selection-specific; enabling it does not validate it.
+    This display-only value does not participate in face priority, ranking, or hard filtering.
+    """
+
+    coef = settings.reid_cross_camera_calibration_coef
+    intercept = settings.reid_cross_camera_calibration_intercept
+    if coef is None or intercept is None:
+        return None
+    if not all(math.isfinite(value) for value in (raw_score, coef, intercept)):
+        return None
+    log_odds = coef * raw_score + intercept
+    if math.isnan(log_odds):
+        return None
+    # Stable sigmoid also handles overflow in finite coefficient multiplication.
+    if log_odds >= 0:
+        return 1.0 / (1.0 + math.exp(-log_odds))
+    exp_odds = math.exp(log_odds)
+    return exp_odds / (1.0 + exp_odds)
+
+
 def annotate_fusion_decision(
     item: ReidMatchItem,
     appearance_score: float,
     *,
     query_camera: uuid.UUID | None,
     chance_ceiling: float,
+    settings: Settings | None = None,
     is_camera_link: bool = False,
 ) -> None:
     """Expose one backend-owned score and explanation for display and later evaluation."""
 
     item.fusion_score = round(appearance_score + 0.05 * _face_evidence(item), 4)
+    # Clear stale values when the same item is reused for a different query/context.
+    item.calibrated_match_probability = None
+    if (
+        settings is not None
+        and query_camera is not None
+        and item.camera_id is not None
+        and item.camera_id != query_camera
+    ):
+        probability = cross_camera_match_probability(item.score, settings)
+        if probability is not None:
+            item.calibrated_match_probability = round(probability, 5)
 
     if item.face_match is True:
         item.evidence_level = "reliable"
