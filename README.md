@@ -41,6 +41,10 @@ of identity or a continuous path between cameras.
 Start with the [first-run guide](docs/first-run.md). It separates a successful local startup from
 a configured model pipeline and explains what an empty result means.
 
+Use its [response checks](docs/first-run.md#check-the-responses) and
+[troubleshooting table](docs/first-run.md#troubleshooting) to check ingestion, detection,
+attribute analysis and indexing separately.
+
 ## Architecture
 
 | Component | Role | Required |
