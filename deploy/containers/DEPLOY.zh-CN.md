@@ -5,7 +5,8 @@
 本手册是操作速查,不重复其内容。
 
 首次部署的全部步骤(目录、env 生成、release 注册、镜像构建、启动、健康等待)
-可由 `deploy/containers/deploy.sh` 一键执行,手工步骤与之等价:
+可由 `deploy/containers/install.sh`(带前置检查与国内镜像源默认值,支持
+`--offline` 离线包)或 `deploy/containers/deploy.sh` 一键执行,手工步骤与之等价:
 
 ```bash
 cd <SightIndex 源码目录>        # 注意:必须是源码目录,不是已部署的根目录

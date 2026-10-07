@@ -106,6 +106,10 @@ services:
       LOCAL_TIMEZONE: Asia/Shanghai
       DATABASE_URL: postgresql+psycopg://sightindex:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/sightindex
       DATA_DIR: /opt/sightindex/data
+      # Multipart uploads spool to TMPDIR before parsing. /tmp is a 256m tmpfs
+      # (the container is read-only), so anything larger dies in the parser with
+      # a 400; spool on the data volume instead.
+      TMPDIR: /opt/sightindex/data/tmp
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:18030}
       AUTO_CREATE_TABLES: "true"
       UPLOAD_IMAGE_MAX_BYTES: ${UPLOAD_IMAGE_MAX_BYTES:-20971520}

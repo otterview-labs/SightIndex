@@ -1,3 +1,4 @@
+import os
 import uuid
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
@@ -32,6 +33,18 @@ class StorageService:
             self.settings.frames_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
+        # Deployments point TMPDIR at the data volume so large multipart uploads spool on
+        # disk instead of the container's small tmpfs. tempfile silently falls back to the
+        # old directory when TMPDIR is missing, which would resurrect the parser 400s, so
+        # create it whenever it lives inside our data tree.
+        tmp_dir = os.environ.get("TMPDIR")
+        if tmp_dir:
+            tmp_path = Path(tmp_dir)
+            try:
+                if tmp_path.is_relative_to(self.settings.data_dir.resolve()):
+                    tmp_path.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
     def save_upload(self, file: UploadFile) -> str:
         """Validate and losslessly re-encode one image before publishing it."""

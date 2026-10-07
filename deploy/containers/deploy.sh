@@ -10,14 +10,24 @@
 #   deploy.sh [--root DIR] [--source DIR] [--release NAME] [--env-file FILE]
 #             [--stacks "base [reid] [embedding] [semantic]"]
 #             [--no-build] [--set-image]
+#             [--pip-mirror URL] [--npm-mirror URL]
+#             [--torch-image REF] [--node-image REF]
 #
-#   --root       deployment root (default $SIGHTINDEX_ROOT or /data/sightindex-bj-test)
-#   --source     SightIndex checkout containing deploy/containers/ (default: cwd)
-#   --release    release name (default: <date>-<shortrev>); must not contain spaces
-#   --env-file   env file (default: <root>/.env)
-#   --stacks     stacks passed to manage.sh up (default: base)
-#   --no-build   skip the image build; reuse the image named by SIGHTINDEX_IMAGE
-#   --set-image  allow updating SIGHTINDEX_IMAGE in an existing env file
+#   --root        deployment root (default $SIGHTINDEX_ROOT or /data/sightindex-bj-test)
+#   --source      SightIndex checkout containing deploy/containers/ (default: cwd)
+#   --release     release name (default: <date>-<shortrev>); must not contain spaces
+#   --env-file    env file (default: <root>/.env)
+#   --stacks      stacks passed to manage.sh up (default: base)
+#   --no-build    skip the image build; reuse the image named by SIGHTINDEX_IMAGE
+#   --set-image   allow updating SIGHTINDEX_IMAGE in an existing env file
+#   --pip-mirror  PyPI index forwarded as the PIP_INDEX_URL build-arg
+#                 (default: $PIP_INDEX_URL, else the Dockerfile's)
+#   --npm-mirror  npm registry forwarded as the NPM_REGISTRY build-arg
+#                 (default: $NPM_REGISTRY, else the Dockerfile's)
+#   --torch-image base image for the runtime stage (default: $TORCH_IMAGE, else
+#                 the Dockerfile's)
+#   --node-image  base image for the frontend stage (default: $NODE_IMAGE, else
+#                 the Dockerfile's)
 #
 # Safety rules (mirrored from deploy/containers/README.md):
 #   never overwrites an existing env file, never touches media/models/cache
@@ -33,23 +43,31 @@ ENV_FILE=""
 STACKS="base"
 DO_BUILD=1
 SET_IMAGE=0
+PIP_MIRROR="${PIP_INDEX_URL:-}"
+NPM_MIRROR="${NPM_REGISTRY:-}"
+TORCH_BASE_IMAGE="${TORCH_IMAGE:-}"
+NODE_BASE_IMAGE="${NODE_IMAGE:-}"
 
 usage() {
-  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --root)      [ $# -ge 2 ] || usage; ROOT="$2"; shift 2 ;;
-    --source)    [ $# -ge 2 ] || usage; SOURCE="$2"; shift 2 ;;
-    --release)   [ $# -ge 2 ] || usage; RELEASE="$2"; shift 2 ;;
-    --env-file)  [ $# -ge 2 ] || usage; ENV_FILE="$2"; shift 2 ;;
-    --stacks)    [ $# -ge 2 ] || usage; STACKS="$2"; shift 2 ;;
-    --no-build)  DO_BUILD=0; shift ;;
-    --set-image) SET_IMAGE=1; shift ;;
-    -h|--help)   usage ;;
-    *)           echo "Unknown argument: $1" >&2; usage ;;
+    --root)        [ $# -ge 2 ] || usage; ROOT="$2"; shift 2 ;;
+    --source)      [ $# -ge 2 ] || usage; SOURCE="$2"; shift 2 ;;
+    --release)     [ $# -ge 2 ] || usage; RELEASE="$2"; shift 2 ;;
+    --env-file)    [ $# -ge 2 ] || usage; ENV_FILE="$2"; shift 2 ;;
+    --stacks)      [ $# -ge 2 ] || usage; STACKS="$2"; shift 2 ;;
+    --no-build)    DO_BUILD=0; shift ;;
+    --set-image)   SET_IMAGE=1; shift ;;
+    --pip-mirror)  [ $# -ge 2 ] || usage; PIP_MIRROR="$2"; shift 2 ;;
+    --npm-mirror)  [ $# -ge 2 ] || usage; NPM_MIRROR="$2"; shift 2 ;;
+    --torch-image) [ $# -ge 2 ] || usage; TORCH_BASE_IMAGE="$2"; shift 2 ;;
+    --node-image)  [ $# -ge 2 ] || usage; NODE_BASE_IMAGE="$2"; shift 2 ;;
+    -h|--help)     usage ;;
+    *)             echo "Unknown argument: $1" >&2; usage ;;
   esac
 done
 
@@ -169,10 +187,17 @@ install -m 0755 "$MANAGE_SRC" "$ROOT/manage.sh"
 
 # --- image ------------------------------------------------------------------
 IMAGE_TAG="sightindex:$RELEASE"
+BUILD_ARGS=()
+[ -n "$PIP_MIRROR" ]      && BUILD_ARGS+=(--build-arg "PIP_INDEX_URL=$PIP_MIRROR")
+[ -n "$NPM_MIRROR" ]      && BUILD_ARGS+=(--build-arg "NPM_REGISTRY=$NPM_MIRROR")
+[ -n "$TORCH_BASE_IMAGE" ] && BUILD_ARGS+=(--build-arg "TORCH_IMAGE=$TORCH_BASE_IMAGE")
+[ -n "$NODE_BASE_IMAGE" ] && BUILD_ARGS+=(--build-arg "NODE_IMAGE=$NODE_BASE_IMAGE")
 if [ "$DO_BUILD" = 1 ]; then
   echo "Building image: $IMAGE_TAG (context $SOURCE)"
+  [ ${#BUILD_ARGS[@]} -gt 0 ] && echo "  mirror build-args: ${BUILD_ARGS[*]}"
   docker build -f "$SOURCE/deploy/containers/Dockerfile" \
     --build-arg SOURCE_REVISION="$revision" \
+    "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}" \
     -t "$IMAGE_TAG" "$SOURCE"
 else
   echo "Skipping build (--no-build)."
