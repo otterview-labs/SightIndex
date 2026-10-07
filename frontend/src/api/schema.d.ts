@@ -236,6 +236,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/images/{image_id}/video-position": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Image Video Position
+         * @description Resolve where a frame sits in its source video.
+         *
+         *     Frames ingested after the video-url columns landed carry an exact link. Older rows
+         *     fall back to the filename convention (<video-stem>_<timestamp>.jpg) plus the earliest
+         *     stored frame of the same video, which is accurate to within one sampling interval.
+         */
+        get: operations["get_image_video_position_api_images__image_id__video_position_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/person-crops": {
         parameters: {
             query?: never;
@@ -1581,6 +1605,10 @@ export interface components {
             location_name?: string | null;
             /** Captured At */
             captured_at: string | null;
+            /** Video Url */
+            video_url?: string | null;
+            /** Video Offset Ms */
+            video_offset_ms?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -1705,6 +1733,25 @@ export interface components {
              */
             image_filename?: string | null;
         };
+        /**
+         * ImageVideoPosition
+         * @description Where a frame sits inside its source video, for seek-and-play in the viewer.
+         */
+        ImageVideoPosition: {
+            /**
+             * Image Id
+             * Format: uuid
+             */
+            image_id: string;
+            /** Video Url */
+            video_url: string;
+            /** Video Offset Ms */
+            video_offset_ms: number;
+            /** Exact */
+            exact: boolean;
+            /** Source Image Url */
+            source_image_url: string;
+        };
         /** IndexRebuildResponse */
         IndexRebuildResponse: {
             /** Target */
@@ -1777,6 +1824,10 @@ export interface components {
             captured_at?: string | null;
             /** Image Url */
             image_url?: string | null;
+            /** Source Video Url */
+            source_video_url?: string | null;
+            /** Video Offset Ms */
+            video_offset_ms?: number | null;
             /** Crop Url */
             crop_url?: string | null;
             /** Thumbnail Url */
@@ -2806,6 +2857,10 @@ export interface components {
             person_id?: string | null;
             /** Person Name */
             person_name?: string | null;
+            /** Source Video Url */
+            source_video_url?: string | null;
+            /** Video Offset Ms */
+            video_offset_ms?: number | null;
             /** Attributes */
             attributes?: {
                 [key: string]: unknown;
@@ -2853,6 +2908,10 @@ export interface components {
             person_id?: string | null;
             /** Person Name */
             person_name?: string | null;
+            /** Source Video Url */
+            source_video_url?: string | null;
+            /** Video Offset Ms */
+            video_offset_ms?: number | null;
             /** Attributes */
             attributes?: {
                 [key: string]: unknown;
@@ -3882,6 +3941,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_image_video_position_api_images__image_id__video_position_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageVideoPosition"];
                 };
             };
             /** @description Validation Error */

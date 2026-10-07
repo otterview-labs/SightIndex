@@ -8,6 +8,7 @@ import type {
   FaceRecognitionRebuildResponse,
   FaceRecognitionResponse,
   ImageRead,
+  ImageVideoPosition,
   IndexRebuildResponse,
   ObservationIndexResponse,
   Person,
@@ -97,6 +98,8 @@ export const videos = {
       method: "POST",
       body,
     }),
+  position: (imageId: string) =>
+    api<ImageVideoPosition>(`/api/images/${imageId}/video-position`),
 };
 
 export const search = {

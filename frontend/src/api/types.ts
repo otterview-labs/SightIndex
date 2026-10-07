@@ -11,6 +11,7 @@ export type VideoProcessResponse = Schemas["VideoProcessResponse"];
 
 export type ImageRead = Schemas["ImageRead"];
 export type PersonCropRead = Schemas["PersonCropRead"];
+export type ImageVideoPosition = Schemas["ImageVideoPosition"];
 
 export type SearchFilters = Schemas["SearchFilters"];
 export type SearchResultItem = Schemas["SearchResultItem"];

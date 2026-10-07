@@ -5,9 +5,11 @@ import { attributes as attributesApi, search as searchApi } from "@/api/client";
 import type { SearchFilters, SearchResultItem, SemanticSearchStatus } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
 import SearchResultCard from "@/components/SearchResultCard.vue";
+import VideoPlayerModal from "@/components/VideoPlayerModal.vue";
 import { useSummary } from "@/composables/useSummary";
 import { useToast } from "@/composables/useToast";
-import { DISPLAY_TIME_ZONE } from "@/utils/format";
+import { useVideoPlayer } from "@/composables/useVideoPlayer";
+import { DISPLAY_TIME_ZONE, fmtTime, shortId } from "@/utils/format";
 
 const QUERY_CHIPS = [
   { query: "红衣戴帽的人", label: "红衣戴帽" },
@@ -46,6 +48,23 @@ const loadingLabel = ref("加载最近裁剪...");
 const searching = ref(false);
 const backfilling = ref(false);
 const attributeStatus = ref(ATTRIBUTE_HINT);
+
+const { activeVideo, openVideoAt, closeVideo } = useVideoPlayer();
+
+function locateVideo(item: SearchResultItem) {
+  if (!item.image_id) return;
+  const title = item.person_name || `crop ${shortId(item.crop_id)}`;
+  openVideoAt({
+    imageId: item.image_id,
+    videoUrl: item.source_video_url,
+    videoOffsetMs: item.video_offset_ms,
+    caption: `${title} · ${fmtTime(item.captured_at) || "时间未知"}`,
+  }).catch((error) => {
+    showError(error instanceof Error && error.message
+      ? new Error(`无法定位视频：${error.message}`)
+      : new Error("无法定位源视频"));
+  });
+}
 
 const dayFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: DISPLAY_TIME_ZONE,
@@ -330,6 +349,7 @@ onMounted(async () => {
                     :key="item.crop_id ?? index"
                     :item="item"
                     :semantic="resultMode === 'semantic'"
+                    @locate-video="locateVideo"
                   />
                 </div>
               </section>
@@ -338,6 +358,8 @@ onMounted(async () => {
         </div>
       </form>
     </section>
+
+    <VideoPlayerModal v-if="activeVideo" :video="activeVideo" @close="closeVideo" />
   </main>
 </template>
 
