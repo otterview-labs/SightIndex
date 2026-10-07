@@ -357,9 +357,10 @@ def test_processing_marker_migration_preserves_legacy_rows(reviewed_app, monkeyp
         session._ensure_compatible_schema()
         columns = {column["name"] for column in inspect(engine).get_columns("images")}
         assert "processed_at" in columns
+        assert {"video_url", "video_offset_ms"} <= columns
         with engine.connect() as connection:
             assert connection.execute(text("SELECT * FROM images")).one() == (
-                "legacy", "/data/legacy.png", None
+                "legacy", "/data/legacy.png", None, None, None
             )
     finally:
         engine.dispose()

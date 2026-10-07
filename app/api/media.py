@@ -1,14 +1,17 @@
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 
 from app.api.deps import AppSettings, DBSession
-from app.models.media import PersonCrop
+from app.models.media import Image, PersonCrop
 from app.schemas.media import (
     ImageRead,
+    ImageVideoPosition,
     MediaCounts,
     PersonCropRead,
     StreamActionResponse,
@@ -92,6 +95,62 @@ def get_image(
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return image
+
+
+@router.get("/images/{image_id}/video-position", response_model=ImageVideoPosition)
+def get_image_video_position(
+    image_id: uuid.UUID,
+    db: DBSession,
+    settings: AppSettings,
+) -> ImageVideoPosition:
+    """Resolve where a frame sits in its source video.
+
+    Frames ingested after the video-url columns landed carry an exact link. Older rows
+    fall back to the filename convention (<video-stem>_<timestamp>.jpg) plus the earliest
+    stored frame of the same video, which is accurate to within one sampling interval.
+    """
+
+    image = db.get(Image, image_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if image.source_type != "video_frame":
+        raise HTTPException(status_code=404, detail="Image is not a video frame")
+
+    if image.video_url and image.video_offset_ms is not None:
+        video_path = settings.data_dir / image.video_url.removeprefix("/data/")
+        if video_path.is_file():
+            return ImageVideoPosition(
+                image_id=image.id,
+                video_url=image.video_url,
+                video_offset_ms=float(image.video_offset_ms),
+                exact=True,
+                source_image_url=image.image_url,
+            )
+
+    stem = Path(image.image_url).name.rsplit("_", 1)[0]
+    candidates = sorted(
+        path for path in settings.videos_dir.glob(f"{stem}.*") if path.is_file()
+    )
+    if not candidates:
+        raise HTTPException(status_code=404, detail="Source video not found")
+    earliest = db.scalar(
+        select(func.min(Image.captured_at)).where(
+            Image.source_type == "video_frame",
+            # The "_" is a LIKE wildcard that also matches the literal separator in frame
+            # filenames; stems are uuid hex so nothing else can collide.
+            Image.image_url.like(f"/data/frames/{stem}%"),
+        )
+    )
+    offset_ms = 0.0
+    if image.captured_at is not None and earliest is not None:
+        offset_ms = max(0.0, (image.captured_at - earliest).total_seconds() * 1000.0)
+    return ImageVideoPosition(
+        image_id=image.id,
+        video_url=f"/data/videos/{candidates[0].name}",
+        video_offset_ms=offset_ms,
+        exact=False,
+        source_image_url=image.image_url,
+    )
 
 
 @router.get("/person-crops", response_model=list[PersonCropRead])

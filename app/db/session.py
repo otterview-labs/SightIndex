@@ -55,6 +55,17 @@ def _ensure_compatible_schema() -> None:
                 connection.execute(
                     text(f"ALTER TABLE images ADD COLUMN processed_at {column_type}")
                 )
+        # Video-position link for frames extracted from uploads. Nullable: existing rows and
+        # stream/upload images have no source video, and older rows recover a position through
+        # the /api/images/{id}/video-position fallback instead of a backfill.
+        with engine.begin() as connection:
+            if "video_url" not in image_columns:
+                connection.execute(text("ALTER TABLE images ADD COLUMN video_url TEXT"))
+            if "video_offset_ms" not in image_columns:
+                offset_type = "DOUBLE PRECISION" if engine.dialect.name == "postgresql" else "REAL"
+                connection.execute(
+                    text(f"ALTER TABLE images ADD COLUMN video_offset_ms {offset_type}")
+                )
     if "crop_face_extractions" in table_names:
         face_cache_columns = {
             column["name"] for column in inspector.get_columns("crop_face_extractions")
@@ -380,6 +391,19 @@ def _ensure_compatible_schema() -> None:
                         if engine.dialect.name != "postgresql"
                         else "ALTER TABLE person_observation_index "
                         "ADD COLUMN person_is_vip BOOLEAN DEFAULT FALSE NOT NULL"
+                    )
+                )
+        with engine.begin() as connection:
+            if "source_video_url" not in observation_columns:
+                connection.execute(
+                    text("ALTER TABLE person_observation_index ADD COLUMN source_video_url TEXT")
+                )
+            if "video_offset_ms" not in observation_columns:
+                offset_type = "DOUBLE PRECISION" if engine.dialect.name == "postgresql" else "REAL"
+                connection.execute(
+                    text(
+                        f"ALTER TABLE person_observation_index "
+                        f"ADD COLUMN video_offset_ms {offset_type}"
                     )
                 )
         _ensure_indexes(

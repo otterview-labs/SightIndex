@@ -26,6 +26,9 @@ class VideoFrameFile:
     url: str
     path: Path
     captured_at: datetime
+    # Source-video link captured at extraction time, later copied onto the Image row.
+    video_url: str | None = None
+    offset_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -195,11 +198,14 @@ class VideoProcessingService:
                     continue
 
                 frames_sampled += 1
+                position_ms = self._frame_position_ms(capture, cv2)
                 frame_file = self._write_frame_file(
                     video_path=video_path,
                     frame=frame,
                     cv2=cv2,
-                    captured_at=self._frame_captured_at(capture, cv2, base_captured_at),
+                    captured_at=base_captured_at + timedelta(milliseconds=position_ms),
+                    video_url=video_url,
+                    offset_ms=position_ms,
                 )
                 active_frame_path = frame_file.path
                 frame_height, frame_width = frame.shape[:2]
@@ -319,6 +325,8 @@ class VideoProcessingService:
             camera_id=camera_id,
             location_id=location_id,
             captured_at=frame_file.captured_at,
+            video_url=frame_file.video_url,
+            video_offset_ms=frame_file.offset_ms,
         )
         self.db.add(image)
         self.db.flush()
@@ -334,6 +342,8 @@ class VideoProcessingService:
         frame: Any,
         cv2: Any,
         captured_at: datetime,
+        video_url: str | None = None,
+        offset_ms: float | None = None,
     ) -> VideoFrameFile:
         self.settings.frames_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{video_path.stem}_{captured_at.strftime('%Y%m%d%H%M%S%f')}.jpg"
@@ -344,11 +354,17 @@ class VideoProcessingService:
             [int(cv2.IMWRITE_JPEG_QUALITY), int(self.settings.frame_jpeg_quality)],
         ):
             raise RuntimeError("Could not write extracted video frame")
-        return VideoFrameFile(url=f"/data/frames/{filename}", path=path, captured_at=captured_at)
+        return VideoFrameFile(
+            url=f"/data/frames/{filename}",
+            path=path,
+            captured_at=captured_at,
+            video_url=video_url,
+            offset_ms=offset_ms,
+        )
 
-    def _frame_captured_at(self, capture: Any, cv2: Any, base_captured_at: datetime) -> datetime:
-        position_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
-        return base_captured_at + timedelta(milliseconds=position_ms)
+    @staticmethod
+    def _frame_position_ms(capture: Any, cv2: Any) -> float:
+        return float(capture.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
 
     def _count_line_crossings(
         self,
