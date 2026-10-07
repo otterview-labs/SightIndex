@@ -32,6 +32,21 @@ class PersonCropRead(ORMModel):
     created_at: datetime
 
 
+class VideoPlaybackRead(BaseModel):
+    """A verified stored-video location, or an explicit reason playback is unavailable."""
+
+    available: bool
+    source_type: str
+    video_url: str | None = None
+    offset_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    captured_at: datetime | None = None
+    reason: str | None = None
+    video_id: uuid.UUID | None = None
+    original_video_url: str | None = None
+    compatibility_status: str = "unknown"
+    has_audio: bool | None = None
+
+
 class MediaCounts(BaseModel):
     """Untruncated totals for the monitor/search overview."""
 
@@ -199,6 +214,10 @@ class StreamActionResponse(BaseModel):
 
 class VideoProcessResponse(BaseModel):
     video_url: str
+    video_id: uuid.UUID | None = None
+    original_video_url: str | None = None
+    compatibility_status: str = "unknown"
+    has_audio: bool | None = None
     frame_interval_seconds: float
     frames_read: int
     frames_sampled: int

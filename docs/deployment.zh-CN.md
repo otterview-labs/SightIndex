@@ -2,9 +2,18 @@
 
 [English](deployment.md) | [简体中文](deployment.zh-CN.md)
 
-本文档说明本仓库中实际提供的部署资源。主要生产部署路径是从源码构建，并由 systemd
-监管。PostgreSQL 以及启用时的 Milvus 使用 Docker Compose 运行。SightIndex 当前不包含
-应用程序 Dockerfile，也不提供一体化 Compose 技术栈。
+本文档说明本仓库实际提供的部署资源。统一入口为项目根目录的 `bash deploy.sh`：
+默认使用包含应用 Dockerfile、PostgreSQL、Milvus 与可选 GPU 服务的容器方案；
+`--target rtx5090` 使用 `/opt/sightindex` 下由 systemd 监管的 RTX 5090 源码方案。
+两种方案不能同时占用同一实例的数据和端口。
+
+先读[一键部署与验收说明](one-click-deployment.zh-CN.md)，了解模型预置、只读 `--check`、
+功能选择、备份和失败后的回退边界。容器的详细配置见
+[镜像部署指南](../deploy/containers/README.md)。本文后续章节保留源码/systemd 的详细配置。
+
+[模型部署说明](model-deployment.zh-CN.md)覆盖已审查锁文件、独立模型检查、离线导入、
+显式下载、完整人脸/ReID/Qwen 资产、授权及向量空间兼容性。可在正式部署时显式准备模型，
+不会在首次请求时下载；当前 RTX systemd 方案不管理 Qwen Embedding。
 
 ## 部署方案
 
@@ -703,3 +712,61 @@ LINE_CROSSING_TRACK_MAX_MISSED_FRAMES=2
 如果检测库给 Pillow 解码入口包装了插件自动安装器，两个入口会验证并使用其保存的原生
 Pillow 解码函数，不执行该包装层，也不修改全局解码状态。无法验证解码器时按普通无效图片
 拒绝请求；损坏的上传文件不能触发安装依赖或被当成成功推理。
+
+### 检索结果定位原视频回放（2026-10-06）
+
+此功能需要后端和重新构建的前端一起更新。上述日期表示代码变更日期，不表示任何服务器
+已完成部署。它不增加 GPU 模型、向量库或后台录像服务，也不需要重建 ReID 索引。
+
+新处理的上传视频会为每张抽帧图保存 `images.source_video_url` 和
+`images.video_offset_seconds`。这两个字段是可空的增量迁移；使用现有数据库初始化／升级
+流程补齐后再启用新代码。`AUTO_CREATE_TABLES=true` 的启动流程会调用这项兼容升级；
+关闭自动建表的部署应先按既有数据库变更流程执行升级。先备份数据库和 `DATA_DIR`，不要
+通过删除历史表或清空媒体目录来升级。回滚旧应用不要求删除新增字段。
+
+ReID、观察表、普通搜索和聊天结果中的「回放视频」按真实 crop 或 image ID 查找来源：
+
+- `GET /api/person-crops/{crop_id}/playback`：通过裁剪的真实父帧关联录像。
+- `GET /api/images/{image_id}/playback`：返回该帧对应的录像位置。
+
+成功示例（演示数据）：
+
+```json
+{
+  "available": true,
+  "source_type": "video_frame",
+  "video_url": "/data/videos/example.mp4",
+  "offset_seconds": 8.375,
+  "captured_at": "2026-10-06T12:00:08.375Z",
+  "reason": null
+}
+```
+
+`offset_seconds=0` 是合法位置；未知位置不会被替换为 0。定位只采信有效、递增的解码
+媒体时间，并维护全部已解码帧的时间高水位。时间缺失、停滞或倒退时返回
+`offset_unknown`；后续时间超过此前高水位才恢复定位，不使用帧序号／FPS 猜测偏移。
+合法的可变帧率时间保持原样。绝对拍摄时间与视频内偏移不是同一个字段，不能用
+`created_at`、文件名或图片 URL 推测旧录像位置。
+
+当前能力边界：
+
+- 新处理的上传视频：保留源文件后可定位回放。源视频与图片应一起备份和留存；仅保留裁剪
+  图不能恢复连续视频。部分帧已提交后处理失败时会保留源视频。
+- 旧视频抽帧：没有显式来源关联时返回 `source_missing`，不自动补猜或全量重跑历史数据。
+- 摄像头采样：当前服务只保存抓帧图，尚未保存连续录像，也未接入 NVR；返回
+  `recording_not_configured`，不会把实时 RTSP 当作历史录像。
+- 图片上传：返回 `not_video`。源文件缺失和时间未知分别返回 `media_missing`、
+  `offset_unknown`。这些是 `200` 下的明确不可回放状态；不存在的 UUID 记录返回 `404`。
+
+播放器等到视频元数据加载完成后先定位，再尝试静音自动播放。浏览器拦截时提供手动播放；
+浏览器不能解码的视频会显示格式／加载错误，而不是假称没有录像。视频兼容准备默认关闭；
+可显式设置 `VIDEO_PREPARATION_ENABLED=true`，只对新上传的本地视频做有界 CPU H.264 MP4
+准备，保留原件、从实际播放文件抽帧并记录 `video_assets` 关联。GET 回放不触发转码，
+历史文件与摄像头录像不自动处理。默认 5 分钟、1080p、120 秒处理时间、2 线程等限制，
+音频规则与工具要求见[一键部署说明](one-click-deployment.zh-CN.md#新上传视频的浏览器兼容准备)。
+建议对实际上传格式做一次浏览器验收，尤其是 MKV、AVI、TS 及 MP4 内部的非通用编码。
+
+媒体继续走同源 `/data/videos/` 与现有认证、HTTP Range；代理必须保留 `Range`、
+`Content-Range` 与 `206`，不能只代理 API 或移除媒体鉴权。不要在 URL 中嵌入登录凭据。
+部署后用合成短视频验收：命中第 8 秒的帧应跳到第 8 秒并实际开始播放，关闭／Esc 后停止；
+无录像摄像头、旧关联缺失、格式不支持应各自显示正确状态。图片放大与视频回放是独立入口。

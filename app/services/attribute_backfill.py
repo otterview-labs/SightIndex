@@ -12,6 +12,11 @@ from sqlalchemy.orm import Query, Session
 
 from app.config.settings import Settings
 from app.models.media import PersonCrop
+from app.services.attribute_failures import (
+    classify_attribute_failure,
+    safe_checkpoint_error,
+    stored_attribute_failure,
+)
 from app.services.structured_attributes import StructuredAttributeService
 from app.services.vlm import VLMRuntimeError
 
@@ -149,10 +154,13 @@ class DurableAttributeBackfillService:
                 try:
                     result = processor(crop)
                 except (VLMRuntimeError, OSError, ValueError) as exc:
+                    failure = classify_attribute_failure(exc)
+                    if hasattr(self.db, "rollback"):
+                        self.db.rollback()
                     attempts = progress.failures.get(crop_id, 0) + 1
                     progress.failures[crop_id] = attempts
                     if attempts >= max_attempts:
-                        progress.permanent_failures[crop_id] = str(exc)
+                        progress.permanent_failures[crop_id] = failure.stored
                         progress.remaining = max(0, progress.remaining - 1)
                         cursor_created_at, cursor_crop_id = self._advance_cursor(
                             progress,
@@ -163,9 +171,9 @@ class DurableAttributeBackfillService:
                         crop_id,
                         attempts,
                         max_attempts,
-                        exc,
+                        failure.code,
                     )
-                    progress.last_errors.append(f"{crop_id}: {exc}")
+                    progress.last_errors.append(f"{crop_id}: {failure.stored}")
                     del progress.last_errors[:-20]
                     self._save(progress)
                     # Do not move past a retryable item.  This keeps a transiently unavailable
@@ -202,9 +210,17 @@ class DurableAttributeBackfillService:
             # the dataclass defaults.
             allowed_fields = {item.name for item in fields(AttributeBackfillProgress)}
             compatible = {key: value for key, value in payload.items() if key in allowed_fields}
-            return AttributeBackfillProgress(**compatible)
+            progress = AttributeBackfillProgress(**compatible)
+            progress.permanent_failures = {
+                key: stored_attribute_failure(value).stored
+                for key, value in progress.permanent_failures.items()
+            }
+            progress.last_errors = [safe_checkpoint_error(value) for value in progress.last_errors][
+                -20:
+            ]
+            return progress
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            logger.warning("Ignoring unreadable attribute backfill state", exc_info=True)
+            logger.warning("Ignoring unreadable attribute backfill state")
             return AttributeBackfillProgress()
 
     def _process_vlm(self, crop: PersonCrop) -> BackfillResult:

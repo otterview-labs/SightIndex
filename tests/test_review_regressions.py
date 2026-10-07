@@ -358,7 +358,9 @@ def test_processing_marker_migration_preserves_legacy_rows(reviewed_app, monkeyp
         columns = {column["name"] for column in inspect(engine).get_columns("images")}
         assert "processed_at" in columns
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT * FROM images")).one() == (
+            assert connection.execute(
+                text("SELECT id, image_url, processed_at FROM images")
+            ).one() == (
                 "legacy", "/data/legacy.png", None
             )
     finally:

@@ -318,8 +318,11 @@ run_python - "$openapi_file" <<'PY'
 import json
 import sys
 
+from app.schemas.media import VideoPlaybackRead
+
 with open(sys.argv[1], encoding="utf-8") as stream:
-    paths = json.load(stream).get("paths", {})
+    contract = json.load(stream)
+paths = contract.get("paths", {})
 required = {
     "/api/media/counts",
     "/api/reid/status",
@@ -334,6 +337,8 @@ required = {
     "/api/attributes/jobs",
     "/api/attributes/jobs/{crop_id}/retry",
     "/api/search/observations/rebuild",
+    "/api/images/{image_id}/playback",
+    "/api/person-crops/{crop_id}/playback",
 }
 missing = sorted(required - paths.keys())
 if missing:
@@ -354,16 +359,43 @@ required_coverage = {"status", "shortlist_count", "compared_count", "query_absen
 if not required_coverage <= schemas.get("ReidFaceCoverage", {}).get("properties", {}).keys():
     raise SystemExit("deployed face diagnostic contract is incomplete")
 print("Per-query face diagnostic contracts: present (not proof of face coverage/accuracy)")
+playback_schema = schemas.get("VideoPlaybackRead", {})
+expected_playback_schema = VideoPlaybackRead.model_json_schema()
+missing_fields = sorted(
+    expected_playback_schema["properties"].keys() - playback_schema.get("properties", {}).keys()
+)
+if missing_fields:
+    raise SystemExit(f"deployed VideoPlaybackRead is missing fields: {', '.join(missing_fields)}")
+if not set(expected_playback_schema["required"]) <= set(playback_schema.get("required", [])):
+    raise SystemExit("deployed VideoPlaybackRead is missing required availability/source fields")
+if (
+    playback_schema["properties"]["offset_seconds"]
+    != expected_playback_schema["properties"]["offset_seconds"]
+):
+    raise SystemExit("deployed playback offset schema does not match the finite nonnegative contract")
+for path in ("/api/images/{image_id}/playback", "/api/person-crops/{crop_id}/playback"):
+    response_schema = (
+        paths[path].get("get", {}).get("responses", {}).get("200", {})
+        .get("content", {}).get("application/json", {}).get("schema", {})
+    )
+    if response_schema.get("$ref") != "#/components/schemas/VideoPlaybackRead":
+        raise SystemExit(f"deployed playback route has no VideoPlaybackRead GET response: {path}")
+print("Stored-video playback routes and response contract: present")
 PY
 
 # Read-only schema check: a healthy process must not hide a skipped additive migration.
-.venv/bin/python - <<'PY'
+run_python - <<'PY'
 from sqlalchemy import inspect
 from app.db.session import engine
 
-columns = {column["name"] for column in inspect(engine).get_columns("crop_face_extractions")}
+inspector = inspect(engine)
+image_columns = {column["name"] for column in inspector.get_columns("images")}
+if not {"source_video_url", "video_offset_seconds", "processed_at"} <= image_columns:
+    raise SystemExit("image schema is outdated; back up the DB and run init_db() before use")
+columns = {column["name"] for column in inspector.get_columns("crop_face_extractions")}
 if not {"absence_reason", "input_fingerprint"} <= columns:
     raise SystemExit("face cache schema is outdated; back up the DB and run init_db() before use")
+print("Image schema: source video, relative offset and completion columns present")
 print("Face cache schema: reason and input fingerprint columns present")
 PY
 
@@ -427,6 +459,10 @@ PY
 if [ -f "$data_dir/tasks/attribute-backfill.json" ]; then
   log "attribute backfill checkpoint exists under DATA_DIR/tasks"
 fi
+
+# Shared acceptance uses a temporary database and generated video for upload/playback.
+# It never adds synthetic records to the running deployment's database.
+run_python deploy/containers/verify.py --stacks 'base reid' --upload-smoke --model-smoke
 
 revision="$(git -c safe.directory="$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || printf unknown)"
 log "all deployment checks passed at revision $revision"

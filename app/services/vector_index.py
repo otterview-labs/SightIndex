@@ -17,6 +17,13 @@ from app.services.embeddings import (
     TextEmbeddingService,
     VisualEmbeddingService,
 )
+from app.services.index_identity import (
+    COLLECTION_SUFFIXES,
+    REID_OBJECT_TYPES,
+    milvus_collection_name,
+    milvus_namespace_identity,
+    reid_space_digest,
+)
 from app.services.observation_index import ObservationIndexService
 from app.services.vlm import VLMCaptionService, VLMRuntimeError
 
@@ -56,16 +63,8 @@ def _hnsw_ef(top_k: int) -> int:
 
 
 class MilvusVectorIndex:
-    collection_suffixes = {
-        "image": "vl_images",
-        "person_crop": "vl_person_crops",
-        "face_embedding": "face_embeddings",
-        # ReID vectors live apart from the VL ones: different model, different dimension, and
-        # they answer a different question (who this is, not what they look like).
-        "reid_person_crop": "reid_person_crops",
-    }
-
-    reid_object_types = frozenset({"reid_person_crop"})
+    collection_suffixes = dict(COLLECTION_SUFFIXES)
+    reid_object_types = REID_OBJECT_TYPES
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -505,19 +504,7 @@ class MilvusVectorIndex:
     @property
     def namespace_identity(self) -> str:
         """Stable logical database identity used by SQL-side ReID markers."""
-
-        configured = (self.settings.milvus_namespace_id or "").strip()
-        if configured:
-            return configured
-        material = "\0".join(
-            [
-                self.settings.milvus_host.strip().lower(),
-                str(self.settings.milvus_port),
-                self.settings.milvus_db.strip(),
-            ]
-        )
-        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-        return f"endpoint-{digest}"
+        return milvus_namespace_identity(self.settings)
 
     @property
     def reid_metric_supported(self) -> bool:
@@ -650,34 +637,18 @@ class MilvusVectorIndex:
         )
 
     def _collection_name(self, object_type: str) -> str:
-        suffix = self.collection_suffixes[object_type]
-        configured_prefix = self.settings.milvus_collection_prefix
-        if (
-            object_type in {"image", "person_crop"}
-            and self.settings.milvus_visual_collection_prefix
-        ):
-            configured_prefix = self.settings.milvus_visual_collection_prefix
-        prefix = configured_prefix.strip("_")
-        name = f"{prefix}_{suffix}" if prefix else suffix
-        if object_type in self.reid_object_types:
-            # Every vector-space and storage-namespace axis selects a fresh collection. This is
-            # conservative even when a namespace points at another physical database, and keeps
-            # a same-endpoint logical reset from mixing with a partially rebuilt old collection.
-            name = f"{name}_{self.reid_space_digest()}"
-        return name
+        return milvus_collection_name(
+            self.settings,
+            object_type,
+            suffixes=self.collection_suffixes,
+            reid_types=self.reid_object_types,
+            space_digest=(
+                self.reid_space_digest() if object_type in self.reid_object_types else None
+            ),
+        )
 
     def reid_space_digest(self) -> str:
-        material = "\0".join(
-            [
-                self.settings.reid_model,
-                self.settings.reid_checkpoint_revision,
-                str(self.settings.reid_embedding_dim),
-                self.settings.reid_preprocess_version,
-                self.settings.milvus_metric_type.upper(),
-                self.namespace_identity,
-            ]
-        )
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return reid_space_digest(self.settings, namespace=self.namespace_identity)
 
     def _embedding_dim(self, object_type: str = "") -> int:
         if object_type in self.reid_object_types:

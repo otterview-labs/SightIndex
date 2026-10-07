@@ -9,6 +9,27 @@ from app.db.session import Base
 from app.models.types import GUID, json_type
 
 
+class VideoAsset(Base):
+    """Explicit ownership of one new upload and its optional browser playback derivative."""
+
+    __tablename__ = "video_assets"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    original_video_url: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    original_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
+    playback_video_url: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
+    preparation_status: Mapped[str] = mapped_column(String, nullable=False, default="preparing")
+    processing_status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    codec: Mapped[str | None] = mapped_column(String, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    has_audio: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    preparation_version: Mapped[str] = mapped_column(String, nullable=False, default="browser-v1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Image(Base):
     __tablename__ = "images"
 
@@ -16,6 +37,9 @@ class Image(Base):
     image_url: Mapped[str] = mapped_column(String, nullable=False)
     thumbnail_url: Mapped[str | None] = mapped_column(String, nullable=True)
     source_type: Mapped[str] = mapped_column(String, nullable=False, default="upload")
+    # Explicit provenance only: old frames remain unknown rather than guessing from names.
+    source_video_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    video_offset_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     camera_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     location_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

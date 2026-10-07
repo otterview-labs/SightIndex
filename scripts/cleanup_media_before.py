@@ -20,6 +20,7 @@ from app.models import persons  # noqa: F401
 from app.models.events import CountingEvent, RecognitionEvent
 from app.models.media import Image, PersonCrop
 from app.models.vectors import FaceEmbedding, VLEmbedding
+from app.services.video_retention import remove_retired_image_files, video_asset_media_urls
 
 
 def main() -> None:
@@ -137,6 +138,7 @@ def main() -> None:
         image_ids_to_delete = image_ids - referenced_image_ids
         images_to_delete = [image for image in images if image.id in image_ids_to_delete]
 
+        protected_video_urls = video_asset_media_urls(db)
         file_rows = [(image.image_url, image.thumbnail_url) for image in images_to_delete]
         file_rows.extend((crop.crop_url, None) for crop in crops)
 
@@ -173,7 +175,7 @@ def main() -> None:
             face_embedding_ids=face_embedding_ids,
             vl_embedding_ids=vl_embedding_ids,
         )
-        removed_files = remove_files(settings.data_dir, file_rows)
+        removed_files = remove_files(settings.data_dir, file_rows, protected_video_urls)
         delete_milvus_entries("image", [str(value) for value in image_ids_to_delete])
         delete_milvus_entries("person_crop", [str(value) for value in crop_ids])
         print(
@@ -314,20 +316,12 @@ def batched(values: list[str], size: int) -> Iterable[list[str]]:
         yield values[index : index + size]
 
 
-def remove_files(data_dir: Path, urls: list[tuple[str | None, str | None]]) -> int:
-    removed = 0
-    for row in urls:
-        for url in row:
-            if not url or not str(url).startswith("/data/"):
-                continue
-            path = data_dir / str(url).removeprefix("/data/")
-            try:
-                if path.exists():
-                    path.unlink()
-                    removed += 1
-            except OSError as exc:
-                print({"file_remove_error": str(path), "error": str(exc)})
-    return removed
+def remove_files(
+    data_dir: Path,
+    urls: list[tuple[str | None, str | None]],
+    protected_urls: frozenset[str] = frozenset(),
+) -> int:
+    return remove_retired_image_files(data_dir, urls, protected_urls)
 
 
 if __name__ == "__main__":

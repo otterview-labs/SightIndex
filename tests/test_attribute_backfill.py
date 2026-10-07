@@ -80,7 +80,7 @@ def test_durable_backfill_resumes_and_quarantines_repeated_failures(monkeypatch,
     assert progress.completed is True
     assert progress.attempted == 3
     assert progress.updated == 1
-    assert progress.permanent_failures == {str(broken.id): "unreadable image"}
+    assert progress.permanent_failures == {str(broken.id): "attribute_error:unknown"}
     assert state_path.is_file()
 
     resumed = DurableAttributeBackfillService(
@@ -91,6 +91,52 @@ def test_durable_backfill_resumes_and_quarantines_repeated_failures(monkeypatch,
 
     assert resumed.attempted == 3
     assert resumed.updated == 1
+
+
+def test_backfill_error_log_checkpoint_and_api_evidence_are_safe(monkeypatch, tmp_path, caplog):
+    broken = _crop(None)
+    path = tmp_path / "checkpoint.json"
+    service = DurableAttributeBackfillService(
+        _Db([broken]), Settings(_env_file=None, data_dir=tmp_path), state_path=path
+    )
+
+    def unavailable(*args, **kwargs):
+        raise TimeoutError("secret-key https://private.test/?token=secret /private/file.jpg")
+
+    monkeypatch.setattr(service.structured, "analyze_person_crop", unavailable)
+    progress = service.run(batch_size=1, max_attempts=1)
+    assert progress.permanent_failures == {str(broken.id): "attribute_error:timeout"}
+    assert progress.last_errors == [f"{broken.id}: attribute_error:timeout"]
+    assert "secret" not in path.read_text() + caplog.text
+    assert "/private/" not in path.read_text() + caplog.text
+
+
+def test_old_checkpoint_errors_are_masked_without_changing_disk_or_failure_cursor(tmp_path):
+    import json
+
+    broken = _crop(None, created_at=datetime(2026, 1, 1))
+    path = tmp_path / "checkpoint.json"
+    raw = {
+        "attempted": 3,
+        "failures": {str(broken.id): 3},
+        "permanent_failures": {str(broken.id): "secret-key /private/file.jpg"},
+        "last_errors": [f"{broken.id}: secret-key https://private.test/?token=secret"],
+        "last_crop_id": str(broken.id),
+        "last_created_at": broken.created_at.isoformat(),
+    }
+    path.write_text(json.dumps(raw))
+    original = path.read_bytes()
+    service = DurableAttributeBackfillService(
+        _Db([broken]), Settings(_env_file=None, data_dir=tmp_path), state_path=path
+    )
+    progress = service.load_progress()
+    assert path.read_bytes() == original
+    assert progress.failures == {str(broken.id): 3}
+    assert progress.last_crop_id == str(broken.id)
+    assert progress.last_created_at == broken.created_at.isoformat()
+    assert progress.permanent_failures == {str(broken.id): "attribute_error:unknown"}
+    assert "secret" not in repr(progress)
+    assert service._pending(1, excluded=set(progress.permanent_failures))[0] == []
 
 
 def test_backfill_uses_bounded_ascending_pages_and_does_not_starve_old_rows(monkeypatch, tmp_path):

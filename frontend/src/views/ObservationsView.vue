@@ -6,6 +6,7 @@ import { face as faceApi, persons as personsApi, search as searchApi } from "@/a
 import type { FaceDiagnosticItem, ObservationIndexItem } from "@/api/types";
 import FaceBoxThumb from "@/components/FaceBoxThumb.vue";
 import PersonSelect from "@/components/PersonSelect.vue";
+import VideoPlaybackButton from "@/components/VideoPlaybackButton.vue";
 import { usePersons } from "@/composables/usePersons";
 import { useToast } from "@/composables/useToast";
 import { fmtTime, formatScore, shortId, shortText } from "@/utils/format";
@@ -611,6 +612,11 @@ onMounted(async () => {
                   >
                     找相似
                   </RouterLink>
+                  <VideoPlaybackButton
+                    v-if="item.crop_id || item.image_id"
+                    :crop-id="item.crop_id || undefined"
+                    :image-id="item.crop_id ? undefined : item.image_id || undefined"
+                  />
                   <button
                     v-if="item.crop_id && !item.person_id"
                     class="mini-button"

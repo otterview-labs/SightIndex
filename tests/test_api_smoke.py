@@ -3153,6 +3153,9 @@ def test_video_upload_queue_full_returns_503_with_exact_partial_progress(monkeyp
         )
         images = client.get("/api/images?has_crops=true").json()
         crops = client.get("/api/person-crops").json()
+        committed_playback = (
+            client.get(f"/api/person-crops/{crops[0]['id']}/playback").json() if crops else None
+        )
 
     assert response.status_code == 503
     detail = response.json()["detail"]
@@ -3168,7 +3171,9 @@ def test_video_upload_queue_full_returns_503_with_exact_partial_progress(monkeyp
     assert len(images) == 1
     assert len(crops) == 1
     assert len(list((tmp_path / "data" / "crops").glob("*"))) == 1
-    assert list((tmp_path / "data" / "videos").glob("*")) == []
+    assert len(list((tmp_path / "data" / "videos").glob("*"))) == 1
+    assert committed_playback["available"] is True
+    assert committed_playback["offset_seconds"] == 0
 
 
 def test_video_upload_with_counting_line_only_stores_crossing_frames(monkeypatch, tmp_path):

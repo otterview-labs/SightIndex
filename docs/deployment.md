@@ -2,10 +2,20 @@
 
 [English](deployment.md) | [简体中文](deployment.zh-CN.md)
 
-This guide describes the deployment assets that are actually present in this repository. The
-primary production path is a source build supervised by systemd. Docker Compose is used for
-PostgreSQL and, when enabled, Milvus. SightIndex does not currently include an application
-Dockerfile or an all-in-one Compose stack.
+The stable entry point is `bash deploy.sh` at the repository root. It defaults to the container
+profile, which includes an application Dockerfile, PostgreSQL, Milvus and optional GPU services.
+`--target rtx5090` selects the source/systemd profile rooted at `/opt/sightindex`.
+Do not run both profiles against the same instance's ports or data.
+
+See the [deployment and acceptance checklist](one-click-deployment.zh-CN.md) for model preparation,
+read-only `--check`, feature selection, backup and failure recovery boundaries, and the
+[container guide](../deploy/containers/README.md) for its detailed configuration. The remaining
+sections of this guide describe the source/systemd configuration.
+
+The [model deployment guide](model-deployment.zh-CN.md) covers reviewed lockfiles, model-only
+checks, offline import, explicit download, complete face/ReID/Qwen assets, licensing, and vector
+identity preservation. Model preparation can be requested explicitly during deployment; it is
+never an implicit first-request download. The RTX profile does not manage Qwen Embedding.
 
 ## Deployment profile
 
@@ -774,3 +784,53 @@ plugin auto-installer, these endpoints validate and use the saved native Pillow 
 running that wrapper or changing global decoder state. An unavailable or untrusted decoder is
 rejected through the normal invalid-image response; malformed uploads must not install packages
 or become successful inference requests.
+
+### Replay a search hit in its original video (2026-10-06)
+
+Deploy the backend and a rebuilt frontend together. This is a code-change date, not a statement
+that any server is already updated. No additional GPU model, vector service, recording daemon,
+or ReID index rebuild is required.
+
+The additive database upgrade adds nullable `images.source_video_url` and
+`images.video_offset_seconds`. The existing startup upgrade applies when
+`AUTO_CREATE_TABLES=true`; installations with automatic schema creation disabled must apply
+their normal database upgrade before enabling this code. Back up the database and `DATA_DIR`;
+do not delete tables or media to upgrade. Older code can ignore the additional columns on rollback.
+
+Newly processed uploaded-video frames persist their source and media offset. Search, ReID,
+observations, and chat result cards offer **回放视频** (replay video), independently of image zoom:
+
+- `GET /api/person-crops/{crop_id}/playback` resolves the crop's actual parent image.
+- `GET /api/images/{image_id}/playback` resolves the stored frame.
+
+The response has `available`, `source_type`, `video_url`, `offset_seconds`, `captured_at`, and
+`reason`. Zero seconds is valid; an unknown offset is not changed to zero. Positioning requires
+valid, increasing decoder media timestamps and tracks the high-water mark of every decoded
+frame. Missing, stalled, or regressing timestamps return `offset_unknown`; positioning resumes
+only after the decoder time exceeds the previous high-water mark. Valid variable-frame-rate
+timestamps remain unchanged. Frame-index/FPS is not used to guess an offset. Do not infer old
+video provenance from filenames, image URLs, creation times, or absolute capture dates.
+
+Keep source videos with the extracted images: crops alone cannot restore continuous footage.
+An upload that fails after committing frames retains its source. Older unlinked video frames
+return `source_missing`. Current camera ingestion stores sampled images, not continuous
+recordings, and has no NVR adapter; it returns `recording_not_configured` rather than opening a
+live RTSP feed as history. Uploaded photos return `not_video`; missing source files and unknown
+offsets return `media_missing` and `offset_unknown`. Unavailable playback is an explicit `200`
+response; nonexistent records return `404`.
+
+The player loads metadata, seeks to the hit, and then attempts muted playback. Autoplay rejection
+offers a manual play control. Unsupported codecs have a distinct error. Video preparation is off
+by default. Explicit `VIDEO_PREPARATION_ENABLED=true` enables bounded CPU H.264 MP4 preparation
+for new local uploads only, preserving the original and extracting frames from the actual playback
+file. The additive `video_assets` table owns both files; GET playback never transcodes. Existing
+history and camera recordings are unchanged. Default limits include five minutes, 1080p, 120 seconds
+of processing, and two CPU threads; see the one-click guide for audio and tool requirements.
+Verify actual input formats in the target browser, especially MKV/AVI/TS and uncommon
+codecs inside MP4 containers.
+
+Media remains on the same-origin authenticated `/data/videos/` route with HTTP Range support.
+Reverse proxies must preserve `Range`, `Content-Range`, `206`, and media authentication; never
+embed credentials in URLs. After deployment, use a synthetic short video to confirm that a hit
+at 8 seconds actually seeks to 8 seconds and plays, closing/Escape stops playback, and unrecorded
+cameras, missing legacy provenance, and unsupported formats show their correct states.

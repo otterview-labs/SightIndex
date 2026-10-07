@@ -1,7 +1,9 @@
+import logging
 import math
 import time
 import uuid
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,13 +15,16 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
 from app.models.events import CountingEvent, RecognitionEvent
-from app.models.media import Image, PersonCrop
+from app.models.media import Image, PersonCrop, VideoAsset
 from app.schemas.media import VideoProcessResponse
 from app.services.frame_processing import Detection, FrameProcessingService
 from app.services.media import MediaService
 from app.services.storage import StorageService
 from app.services.time_utils import database_datetime, local_now
 from app.services.vector_index_queue import VectorQueueFullError
+from app.services.video_preparation import VERSION, VideoPreparationError, prepare_uploaded_video
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,7 @@ class VideoProcessingBackpressureError(VectorQueueFullError):
         image_ids: list[uuid.UUID],
         crop_ids: list[uuid.UUID],
         counting_events_created: int,
+        video_id: uuid.UUID | None = None,
     ) -> None:
         self.cause = cause
         self.frames_read = frames_read
@@ -74,13 +80,14 @@ class VideoProcessingBackpressureError(VectorQueueFullError):
         self.image_ids = tuple(image_ids)
         self.crop_ids = tuple(crop_ids)
         self.counting_events_created = counting_events_created
+        self.video_id = video_id
         super().__init__(
             "vector index queue is full; "
             f"video processing stopped after {frames_processed} completed sampled frames"
         )
 
     def api_detail(self) -> dict[str, object]:
-        return {
+        detail: dict[str, object] = {
             "code": "vector_index_queue_full",
             "message": str(self),
             "cause": str(self.cause),
@@ -99,6 +106,9 @@ class VideoProcessingBackpressureError(VectorQueueFullError):
             "image_ids": [str(image_id) for image_id in self.image_ids],
             "crop_ids": [str(crop_id) for crop_id in self.crop_ids],
         }
+        if self.video_id is not None:
+            detail["video_id"] = str(self.video_id)
+        return detail
 
 
 class VideoProcessingService:
@@ -125,6 +135,18 @@ class VideoProcessingService:
         if video_path is None:
             self.storage.remove_data_url(video_url)
             raise ValueError("Uploaded video path cannot be resolved")
+        if self.settings.video_preparation_enabled:
+            return self._process_prepared_upload(
+                video_path=video_path,
+                original_url=video_url,
+                frame_interval_seconds=frame_interval_seconds,
+                max_frames=max_frames,
+                store_empty_frames=store_empty_frames,
+                counting_line=counting_line,
+                camera_id=camera_id,
+                location_id=location_id,
+                captured_at=captured_at,
+            )
         try:
             return self.process_video_path(
                 video_path=video_path,
@@ -137,9 +159,131 @@ class VideoProcessingService:
                 location_id=location_id,
                 captured_at=captured_at,
             )
-        except Exception:
-            self.storage.remove_data_url(video_url)
+        except VideoProcessingBackpressureError as exc:
+            # Completed frames already reference this source; preserve their replay evidence.
+            if not exc.image_ids:
+                self.storage.remove_data_url(video_url)
             raise
+        except Exception:
+            try:
+                self.db.rollback()
+                has_committed_frames = (
+                    self.db.scalar(
+                        select(Image.id).where(Image.source_video_url == video_url).limit(1)
+                    )
+                    is not None
+                )
+            except Exception:
+                # A database outage must not remove a possibly committed source video.
+                logger.warning("Could not verify uploaded video ownership; preserving source")
+            else:
+                if not has_committed_frames:
+                    self.storage.remove_data_url(video_url)
+            raise
+
+    def _process_prepared_upload(
+        self,
+        *,
+        video_path: Path,
+        original_url: str,
+        frame_interval_seconds: float,
+        max_frames: int,
+        store_empty_frames: bool | None,
+        counting_line: CountingLine | None,
+        camera_id: uuid.UUID | None,
+        location_id: uuid.UUID | None,
+        captured_at: datetime | None,
+    ) -> VideoProcessResponse:
+        """Persist ownership before preparation; never overwrite or delete the original."""
+        asset = VideoAsset(
+            original_video_url=original_url,
+            preparation_status="preparing",
+            processing_status="pending",
+            preparation_version=VERSION,
+        )
+        self.db.add(asset)
+        self.db.commit()
+        self.db.refresh(asset)
+        asset_id = asset.id
+        # Release the refresh transaction before a potentially slow external CPU process.
+        self.db.commit()
+        try:
+            prepared = prepare_uploaded_video(video_path, original_url, self.settings)
+        except VideoPreparationError as exc:
+            exc.video_id = asset_id
+            self._record_video_asset_status(asset_id, "failed", "pending", exc.code)
+            raise
+        except Exception:
+            self._record_video_asset_status(asset_id, "failed", "pending", "preparation_failed")
+            failure = VideoPreparationError("preparation_failed", 503)
+            failure.video_id = asset_id
+            raise failure from None
+
+        asset = self.db.get(VideoAsset, asset_id)
+        if asset is None:
+            raise VideoPreparationError("asset_missing", 503)
+        asset.original_sha256 = prepared.original_sha256
+        asset.playback_video_url = prepared.url
+        asset.preparation_status = prepared.status
+        asset.processing_status = "processing"
+        asset.codec = prepared.info.codec
+        asset.duration_seconds = prepared.info.duration_seconds
+        asset.has_audio = prepared.info.has_audio
+        self.db.commit()
+        try:
+            result = self.process_video_path(
+                video_path=prepared.path,
+                video_url=prepared.url,
+                frame_interval_seconds=frame_interval_seconds,
+                max_frames=max_frames,
+                store_empty_frames=store_empty_frames,
+                counting_line=counting_line,
+                camera_id=camera_id,
+                location_id=location_id,
+                captured_at=captured_at,
+            )
+        except VideoProcessingBackpressureError as exc:
+            exc.video_id = asset_id
+            self._record_video_asset_status(
+                asset_id,
+                prepared.status,
+                "partial" if exc.image_ids else "failed",
+                "vector_index_queue_full",
+            )
+            raise
+        except Exception:
+            self._record_video_asset_status(
+                asset_id, prepared.status, "failed", "processing_failed"
+            )
+            failure = VideoPreparationError("processing_failed", 422)
+            failure.video_id = asset_id
+            raise failure from None
+        self._record_video_asset_status(asset_id, prepared.status, "complete", None)
+        return result.model_copy(
+            update={
+                "video_id": asset_id,
+                "original_video_url": original_url,
+                "compatibility_status": prepared.status,
+                "has_audio": prepared.info.has_audio,
+            }
+        )
+
+    def _record_video_asset_status(
+        self, asset_id: uuid.UUID, preparation: str, processing: str, reason: str | None
+    ) -> None:
+        """Best-effort metadata update without masking a failure or deleting media."""
+        try:
+            self.db.rollback()
+            asset = self.db.get(VideoAsset, asset_id)
+            if asset is not None:
+                asset.preparation_status = preparation
+                asset.processing_status = processing
+                asset.reason = reason
+                self.db.commit()
+        except Exception:
+            with suppress(Exception):
+                self.db.rollback()
+            logger.warning("Could not update prepared video ownership state")
 
     def process_video_path(
         self,
@@ -167,8 +311,9 @@ class VideoProcessingService:
             if store_empty_frames is None
             else store_empty_frames
         )
-        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-        frame_step = max(1, round(fps * frame_interval_seconds)) if fps > 0 else 1
+        fps = self._finite_nonnegative(capture.get(cv2.CAP_PROP_FPS)) or 0.0
+        sample_step = fps * frame_interval_seconds
+        frame_step = max(1, round(sample_step)) if math.isfinite(sample_step) else 1
         base_captured_at = database_datetime(
             captured_at or local_now(self.settings),
             self.settings,
@@ -184,6 +329,7 @@ class VideoProcessingService:
         tracks: dict[int, PersonTrack] = {}
         next_track_id = 1
         active_frame_path: Path | None = None
+        previous_media_position_ms: float | None = None
 
         try:
             while frames_sampled < max_frames:
@@ -192,6 +338,19 @@ class VideoProcessingService:
                     break
                 frame_index = frames_read
                 frames_read += 1
+                # Inspect every decoded frame, including frames omitted by sampling. A clock
+                # reversal on an omitted frame must not make the next stored frame look valid.
+                position_ms = self._finite_nonnegative(capture.get(cv2.CAP_PROP_POS_MSEC))
+                video_offset_seconds = self._offset_from_media_position(
+                    position_ms,
+                    frame_index=frame_index,
+                    fps=fps,
+                    previous_position_ms=previous_media_position_ms,
+                )
+                if position_ms is not None:
+                    # Keep the high-water mark: a broken clock must recover past its earlier
+                    # value before we trust it again. Never guess a seek position from FPS.
+                    previous_media_position_ms = max(previous_media_position_ms or 0.0, position_ms)
                 if frame_index % frame_step != 0:
                     continue
 
@@ -200,7 +359,9 @@ class VideoProcessingService:
                     video_path=video_path,
                     frame=frame,
                     cv2=cv2,
-                    captured_at=self._frame_captured_at(capture, cv2, base_captured_at),
+                    captured_at=self._captured_at_for_offset(
+                        base_captured_at, video_offset_seconds
+                    ),
                 )
                 active_frame_path = frame_file.path
                 frame_height, frame_width = frame.shape[:2]
@@ -230,6 +391,8 @@ class VideoProcessingService:
                         frame_file,
                         camera_id=camera_id,
                         location_id=location_id,
+                        source_video_url=video_url,
+                        video_offset_seconds=video_offset_seconds,
                     )
                     crossing_detections = self._crossing_detections(detections, crossings)
                     crops = self.processor.process_image(image, detections=crossing_detections)
@@ -252,6 +415,8 @@ class VideoProcessingService:
                         frame_file,
                         camera_id=camera_id,
                         location_id=location_id,
+                        source_video_url=video_url,
+                        video_offset_seconds=video_offset_seconds,
                     )
                     crops = self.processor.process_image(image, detections=detections)
                     self._try_index_frame_image(image)
@@ -312,10 +477,14 @@ class VideoProcessingService:
         frame_file: VideoFrameFile,
         camera_id: uuid.UUID | None = None,
         location_id: uuid.UUID | None = None,
+        source_video_url: str | None = None,
+        video_offset_seconds: float | None = None,
     ) -> Image:
         image = Image(
             image_url=frame_file.url,
             source_type="video_frame",
+            source_video_url=source_video_url,
+            video_offset_seconds=video_offset_seconds,
             camera_id=camera_id,
             location_id=location_id,
             captured_at=frame_file.captured_at,
@@ -336,7 +505,10 @@ class VideoProcessingService:
         captured_at: datetime,
     ) -> VideoFrameFile:
         self.settings.frames_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{video_path.stem}_{captured_at.strftime('%Y%m%d%H%M%S%f')}.jpg"
+        # Duplicate/unknown decoder timestamps must not overwrite an earlier frame's pixels.
+        filename = (
+            f"{video_path.stem}_{captured_at.strftime('%Y%m%d%H%M%S%f')}_{uuid.uuid4().hex}.jpg"
+        )
         path = self.settings.frames_dir / filename
         if not cv2.imwrite(
             str(path),
@@ -347,8 +519,87 @@ class VideoProcessingService:
         return VideoFrameFile(url=f"/data/frames/{filename}", path=path, captured_at=captured_at)
 
     def _frame_captured_at(self, capture: Any, cv2: Any, base_captured_at: datetime) -> datetime:
-        position_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
-        return base_captured_at + timedelta(milliseconds=position_ms)
+        """Compatibility helper for direct callers; unknown times retain the base stamp."""
+
+        offset = self._frame_offset_seconds(capture, cv2, frame_index=0, fps=0.0)
+        return self._captured_at_for_offset(base_captured_at, offset)
+
+    @staticmethod
+    def _finite_nonnegative(value: object) -> float | None:
+        """Normalize decoder numbers without allowing NaN, infinity, or negative times."""
+
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) and number >= 0 else None
+
+    @classmethod
+    def _frame_offset_seconds(
+        cls,
+        capture: Any,
+        cv2: Any,
+        *,
+        frame_index: int,
+        fps: float,
+        previous_position_ms: float | None = None,
+    ) -> float | None:
+        """Read this frame's media clock; FPS alone cannot establish a reliable seek time.
+
+        The FPS argument remains accepted for compatibility, but is never used to infer a
+        playback offset. It may be an average for variable-rate media, and does not establish
+        a fixed frame rate or the stream's starting timestamp.
+        """
+
+        position_ms = cls._finite_nonnegative(capture.get(cv2.CAP_PROP_POS_MSEC))
+        return cls._offset_from_media_position(
+            position_ms,
+            frame_index=frame_index,
+            fps=fps,
+            previous_position_ms=previous_position_ms,
+        )
+
+    @classmethod
+    def _offset_from_media_position(
+        cls,
+        position_ms: float | None,
+        *,
+        frame_index: int,
+        fps: float,
+        previous_position_ms: float | None = None,
+    ) -> float | None:
+        """Preserve increasing decoder times and abstain for absent or broken media clocks.
+
+        ``previous_position_ms`` is the high-water mark of all earlier decoded frames, not
+        merely the previous stored frame. A recovered clock must exceed that mark. Zero is
+        legitimate for the first decoded frame, but not for later unsupported/stalled clocks.
+        ``fps`` is retained for existing callers and intentionally does not provide a fallback.
+        """
+
+        position_ms = cls._finite_nonnegative(position_ms)
+        if (
+            frame_index >= 0
+            and position_ms is not None
+            and (position_ms > 0 or frame_index == 0)
+            and (previous_position_ms is None or position_ms > previous_position_ms)
+        ):
+            return position_ms / 1000.0
+        return None
+
+    @staticmethod
+    def _captured_at_for_offset(
+        base_captured_at: datetime, offset_seconds: float | None
+    ) -> datetime:
+        """Keep display timestamps usable when the decoder has no trustworthy media clock."""
+
+        if offset_seconds is None:
+            return base_captured_at
+        try:
+            return base_captured_at + timedelta(seconds=offset_seconds)
+        except OverflowError:
+            return base_captured_at
 
     def _count_line_crossings(
         self,

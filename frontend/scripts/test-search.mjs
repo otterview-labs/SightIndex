@@ -160,3 +160,82 @@ test("older backend without capabilities still loads strict search", async conte
   assert.equal(state.results.value.length, 1);
   assert.match(state.capabilityError.value, /暂用严格标签/);
 });
+
+// Render the actual card templates with a playback stub. The cards must pass stored crop or
+// image identifiers, never infer provenance from a thumbnail URL, person id, or array index.
+const playbackStub = vue.defineComponent({
+  props: ["cropId", "imageId"],
+  setup: props => () => vue.h("button", {
+    type: "button",
+    "data-crop-id": props.cropId,
+    "data-image-id": props.imageId,
+  }, "回放视频"),
+});
+
+function loadCard(name) {
+  const cardFilename = fileURLToPath(new URL(`../src/components/${name}.vue`, import.meta.url));
+  const { descriptor } = parse(readFileSync(cardFilename, "utf8"), { filename: cardFilename });
+  const source = compileScript(descriptor, { id: "search-card-test", inlineTemplate: true }).content;
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  });
+  const mocks = {
+    vue,
+    "@/components/VideoPlaybackButton.vue": { default: playbackStub },
+    "@/utils/attributes": { structuredAttributeChips: () => [] },
+    "@/utils/format": {
+      fmtTime: value => value || "未记录时间", formatScore: String,
+      shortId: value => value || "-", shortText: String,
+    },
+  };
+  const module = { exports: {} };
+  new Function("require", "module", "exports", outputText)(
+    dependency => {
+      assert.ok(dependency in mocks, `Unexpected card dependency: ${dependency}`);
+      return mocks[dependency];
+    }, module, module.exports,
+  );
+  return module.exports.default;
+}
+
+const { renderToString } = require("@vue/server-renderer");
+const searchCard = loadCard("SearchResultCard");
+const chatCards = loadCard("ChatResults");
+
+test("search cards replay the stored crop and preserve the image preview", async () => {
+  const html = await renderToString(vue.createSSRApp(searchCard, {
+    item: { crop_id: "synthetic-crop", image_id: "synthetic-image", crop_url: "/synthetic-crop.jpg", score: 0.5 },
+  }));
+  assert.match(html, /data-crop-id="synthetic-crop"/);
+  assert.doesNotMatch(html, /data-image-id=/);
+  assert.match(html, /<a[^>]*href="\/synthetic-crop\.jpg"[^>]*>[\s\S]*?<img/);
+  for (const anchor of html.matchAll(/<a\b[\s\S]*?<\/a>/g)) assert.doesNotMatch(anchor[0], /<button\b/);
+});
+
+test("image-only search cards use image provenance and id-less cards do not invent it", async () => {
+  const imageHtml = await renderToString(vue.createSSRApp(searchCard, {
+    item: { image_id: "synthetic-image", image_url: "/synthetic-frame.jpg", score: 0.5 },
+  }));
+  assert.match(imageHtml, /data-image-id="synthetic-image"/);
+  assert.doesNotMatch(imageHtml, /data-crop-id=/);
+  const noIdHtml = await renderToString(vue.createSSRApp(searchCard, {
+    item: { person_id: "synthetic-person", crop_url: "/not-a-record-id.jpg", score: 0.5 },
+  }));
+  assert.doesNotMatch(noIdHtml, /回放视频|data-(?:crop|image)-id/);
+});
+
+test("chat result playback is a separate control and never treats a person profile as video", async () => {
+  const html = await renderToString(vue.createSSRApp(chatCards, {
+    items: [
+      { crop_id: "synthetic-crop", image_id: "synthetic-parent", face_url: "/synthetic-face.jpg" },
+      { image_id: "synthetic-image", image_url: "/synthetic-frame.jpg" },
+      { person_id: "synthetic-person", avatar_url: "/synthetic-avatar.jpg" },
+    ],
+  }));
+  assert.equal([...html.matchAll(/回放视频/g)].length, 2);
+  assert.match(html, /data-crop-id="synthetic-crop"/);
+  assert.match(html, /data-image-id="synthetic-image"/);
+  assert.doesNotMatch(html, /data-image-id="synthetic-parent"|data-(?:crop|image)-id="synthetic-person"/);
+  assert.equal([...html.matchAll(/<article\b/g)].length, 3);
+  for (const anchor of html.matchAll(/<a\b[\s\S]*?<\/a>/g)) assert.doesNotMatch(anchor[0], /<button\b/);
+});

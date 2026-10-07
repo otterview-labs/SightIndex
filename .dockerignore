@@ -18,3 +18,17 @@ frontend/*.tsbuildinfo
 **/__pycache__/
 **/.env
 **/.env.*
+**/*.pt
+**/*.pt.*
+**/*.pth
+**/*.pth.*
+**/*.onnx
+**/*.onnx.*
+**/*.safetensors
+**/*.safetensors.*
+**/*.bin
+**/*.bin.*
+**/*.partial
+**/.sightindex-model-assets.lock
+**/.sightindex-model-assets-quarantine
+**/.sightindex-model-assets-quarantine/**

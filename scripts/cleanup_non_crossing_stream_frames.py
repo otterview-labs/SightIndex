@@ -12,6 +12,7 @@ from app.models import persons  # noqa: F401
 from app.models.events import CountingEvent, RecognitionEvent
 from app.models.media import Image, PersonCrop
 from app.models.vectors import FaceEmbedding, VLEmbedding
+from app.services.video_retention import remove_retired_image_files, video_asset_media_urls
 
 BACKUP_STAMP = "20260518_crossing_only_v2"
 
@@ -26,14 +27,10 @@ def main() -> None:
     settings = get_settings()
     with SessionLocal() as db:
         counted_image_ids = {
-            value
-            for value in db.scalars(select(CountingEvent.image_id)).all()
-            if value is not None
+            value for value in db.scalars(select(CountingEvent.image_id)).all() if value is not None
         }
         counted_crop_ids = {
-            value
-            for value in db.scalars(select(CountingEvent.crop_id)).all()
-            if value is not None
+            value for value in db.scalars(select(CountingEvent.crop_id)).all() if value is not None
         }
         counted_recognition_ids = {
             value
@@ -114,11 +111,12 @@ def main() -> None:
 
         backup_tables()
 
+        protected_video_urls = video_asset_media_urls(db)
         stale_file_rows = [(image.image_url, image.thumbnail_url) for image in stale_images]
         stale_file_rows.extend((crop.crop_url, None) for crop in stale_crops)
         delete_rows(stale_image_ids, stale_crop_ids)
 
-        removed_files = remove_files(settings.data_dir, stale_file_rows)
+        removed_files = remove_files(settings.data_dir, stale_file_rows, protected_video_urls)
         delete_milvus_entries("image", [str(value) for value in stale_image_ids])
         delete_milvus_entries("person_crop", [str(value) for value in stale_crop_ids])
         remaining = {
@@ -274,20 +272,12 @@ def batched(values: list[str], size: int) -> Iterable[list[str]]:
         yield values[index : index + size]
 
 
-def remove_files(data_dir: Path, urls: list[tuple[str | None, str | None]]) -> int:
-    removed = 0
-    for row in urls:
-        for url in row:
-            if not url or not str(url).startswith("/data/"):
-                continue
-            path = data_dir / str(url).removeprefix("/data/")
-            try:
-                if path.exists():
-                    path.unlink()
-                    removed += 1
-            except OSError as exc:
-                print({"file_remove_error": str(path), "error": str(exc)})
-    return removed
+def remove_files(
+    data_dir: Path,
+    urls: list[tuple[str | None, str | None]],
+    protected_urls: frozenset[str] = frozenset(),
+) -> int:
+    return remove_retired_image_files(data_dir, urls, protected_urls)
 
 
 if __name__ == "__main__":

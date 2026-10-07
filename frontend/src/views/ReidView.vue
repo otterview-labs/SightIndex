@@ -18,6 +18,7 @@ import FileField from "@/components/FileField.vue";
 import ReidFeedbackButtons from "@/components/ReidFeedbackButtons.vue";
 import ReidEvidenceSummary from "@/components/ReidEvidenceSummary.vue";
 import ReidFaceCoverageSummary from "@/components/ReidFaceCoverageSummary.vue";
+import VideoPlaybackButton from "@/components/VideoPlaybackButton.vue";
 import { useToast } from "@/composables/useToast";
 import { fmtTime, formatScore, shortId } from "@/utils/format";
 
@@ -802,6 +803,7 @@ onBeforeUnmount(() => {
             <RouterLink class="reid-link-query" :to="{ path: '/reid', query: { crop_id: link.crop_id } }">
               用这张图检索
             </RouterLink>
+            <VideoPlaybackButton :crop-id="String(link.crop_id)" />
             <ReidFeedbackButtons
               v-if="activeQueryCropId"
               :value="feedbackValue(link.crop_id)"
@@ -938,6 +940,7 @@ onBeforeUnmount(() => {
               :when="visitWhen(item)"
               :confirmed="resultsQueryCropId === activeQueryCropId && activeQueryCropId ? feedbackValue(item.crop_id) : null"
             />
+            <VideoPlaybackButton :crop-id="String(item.crop_id)" />
             <ReidFeedbackButtons
               v-if="resultsQueryCropId === activeQueryCropId && resultsQueryCropId"
               :value="feedbackValue(item.crop_id)"

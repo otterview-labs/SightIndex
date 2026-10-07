@@ -106,6 +106,13 @@ Next, follow [upload, process and inspect](docs/first-run.md#upload-process-and-
 
 ## Deployment
 
+Use `bash deploy.sh` from the repository root for containers, or add `--target rtx5090` for
+the systemd profile. Prepare private configuration and offline model assets first; `--check`
+performs a read-only preflight. See the [deployment/acceptance checklist](docs/one-click-deployment.zh-CN.md)
+for supported capabilities and recovery boundaries.
+Model-only checks, reviewed offline imports, explicit downloads, licensing and index migration
+are covered by the [model deployment guide](docs/model-deployment.zh-CN.md).
+
 The existing deployment assets use a source build managed by systemd, with PostgreSQL and
 optionally Milvus managed by Docker Compose. An isolated container deployment is also available
 in [`deploy/containers/README.md`](deploy/containers/README.md), including a multi-stage application

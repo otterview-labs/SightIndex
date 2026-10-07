@@ -20,6 +20,12 @@ SKIP_MILVUS=0
 SKIP_BACKUP=0
 START_BACKFILL=0
 SKIP_VERIFY=0
+CHECK_ONLY=0
+MODEL_MANIFEST=""
+MODEL_SOURCE=""
+PREPARE_MODELS=0
+DOWNLOAD_MODELS=0
+ACK_MODEL_TERMS=0
 SERVICES_STOPPED=0
 BACKFILL_WAS_ACTIVE=0
 VENV_REPLACEMENT_STARTED=0
@@ -33,6 +39,12 @@ Install or update the reviewed checkout on an RTX 5090 host. This script never r
 select and review the release revision before invoking it.
 
 Options:
+  --check           Run the read-only RTX deployment preflight and exit.
+  --model-manifest FILE  Check a reviewed model lockfile before asset verification.
+  --prepare-models   Import/fetch missing model files before deployment checks.
+  --model-source DIR  Offline bundle whose files match the reviewed lockfile.
+  --download-models Explicitly fetch pinned files instead of using an offline bundle.
+  --acknowledge-model-terms  Record review; does not grant commercial model rights.
   --skip-deps       Reuse the existing Python virtual environment.
   --skip-frontend   Reuse the existing frontend/dist bundle.
   --skip-milvus     Do not start or update the local Milvus Compose stack.
@@ -116,6 +128,14 @@ trap 'on_error "$?" "$LINENO"' ERR
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --check) CHECK_ONLY=1 ;;
+    --model-manifest|--model-source)
+      [ "$#" -ge 2 ] || fail "model option needs a value"
+      if [ "$1" = --model-manifest ]; then MODEL_MANIFEST="$2"; else MODEL_SOURCE="$2"; fi
+      shift ;;
+    --prepare-models) PREPARE_MODELS=1 ;;
+    --download-models) DOWNLOAD_MODELS=1; PREPARE_MODELS=1 ;;
+    --acknowledge-model-terms) ACK_MODEL_TERMS=1 ;;
     --skip-deps) SKIP_DEPS=1 ;;
     --skip-frontend) SKIP_FRONTEND=1 ;;
     --skip-milvus) SKIP_MILVUS=1 ;;
@@ -123,10 +143,31 @@ while [ "$#" -gt 0 ]; do
     --start-backfill) START_BACKFILL=1 ;;
     --skip-verify) SKIP_VERIFY=1 ;;
     -h|--help) usage; exit 0 ;;
-    *) usage >&2; fail "unknown option: $1" ;;
+    *) usage >&2; fail "unknown option; use --help" ;;
   esac
   shift
 done
+
+[ -z "$MODEL_SOURCE" ] || [ "$DOWNLOAD_MODELS" -eq 0 ] || fail "choose offline source or download, not both"
+if [ "$PREPARE_MODELS" -eq 1 ]; then
+  [ -n "$MODEL_MANIFEST" ] || fail "model preparation requires --model-manifest"
+  if [ "$CHECK_ONLY" -eq 0 ]; then
+    [ "$ACK_MODEL_TERMS" -eq 1 ] || fail "model preparation requires --acknowledge-model-terms"
+    [ -n "$MODEL_SOURCE" ] || [ "$DOWNLOAD_MODELS" -eq 1 ] || fail "select model source or explicit download"
+  fi
+elif [ -n "$MODEL_SOURCE" ] || [ "$ACK_MODEL_TERMS" -eq 1 ]; then
+  fail "model source/terms options require --prepare-models"
+fi
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  if [ -n "$MODEL_MANIFEST" ]; then
+    "${SIGHTINDEX_DEPLOY_PYTHON:-python3}" "$ROOT_DIR/deploy/models/setup.py" \
+      --target rtx5090 --source "$ROOT_DIR" --env-file "$ENV_FILE" \
+      --stacks 'base reid' --manifest "$MODEL_MANIFEST" --check
+  fi
+  exec "${SIGHTINDEX_DEPLOY_PYTHON:-python3}" "$ROOT_DIR/deploy/containers/preflight.py" \
+    --target rtx5090 --source "$ROOT_DIR" --env-file "$ENV_FILE" \
+    --stacks 'base reid' --check-tools
+fi
 
 [ "$(id -u)" -eq 0 ] || fail "run as root so systemd units can be installed"
 [ "$ROOT_DIR" = "$EXPECTED_ROOT" ] \
@@ -429,6 +470,16 @@ working_tree_status="$(as_deployer git -C "$ROOT_DIR" status --porcelain --untra
 if [ -n "$working_tree_status" ]; then
   fail "deployment checkout is not clean; review tracked and untracked files before deployment"
 fi
+if [ -n "$MODEL_MANIFEST" ]; then
+  model_args=(--target rtx5090 --source "$ROOT_DIR" --env-file "$ENV_FILE" --stacks 'base reid' --manifest "$MODEL_MANIFEST")
+  if [ "$PREPARE_MODELS" -eq 1 ]; then
+    model_args+=(--acknowledge-model-terms)
+    if [ "$DOWNLOAD_MODELS" -eq 1 ]; then model_args+=(--download); else model_args+=(--source-dir "$MODEL_SOURCE"); fi
+  else
+    model_args+=(--check)
+  fi
+  "${SIGHTINDEX_DEPLOY_PYTHON:-python3}" "$ROOT_DIR/deploy/models/setup.py" "${model_args[@]}"
+fi
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
   "$data_dir" "$SERVICE_HOME/.cache"
 as_service test -w "$data_dir" || fail "$SERVICE_USER cannot write DATA_DIR=$data_dir"
@@ -669,6 +720,9 @@ if [ "$SKIP_FRONTEND" -eq 0 ]; then
   as_deployer npm --prefix "$ROOT_DIR/frontend" ci >"$LOG_DIR/frontend-build.log" 2>&1
   as_deployer npm --prefix "$ROOT_DIR/frontend" run build >>"$LOG_DIR/frontend-build.log" 2>&1
   as_deployer npm --prefix "$ROOT_DIR/frontend" run test:reid >>"$LOG_DIR/frontend-build.log" 2>&1
+  as_deployer npm --prefix "$ROOT_DIR/frontend" run test:search >>"$LOG_DIR/frontend-build.log" 2>&1
+  as_deployer npm --prefix "$ROOT_DIR/frontend" run test:observations >>"$LOG_DIR/frontend-build.log" 2>&1
+  as_deployer npm --prefix "$ROOT_DIR/frontend" run test:playback >>"$LOG_DIR/frontend-build.log" 2>&1
 fi
 [ -f "$ROOT_DIR/frontend/dist/index.html" ] || fail "frontend/dist/index.html is missing"
 assert_trusted_artifact "$ROOT_DIR/frontend/dist" "frontend bundle"

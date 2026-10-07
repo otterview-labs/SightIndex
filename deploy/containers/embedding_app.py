@@ -19,14 +19,16 @@ from pydantic import Field
 from app.api.upload_limits import UploadSizeLimitMiddleware
 from app.config.settings import Settings
 from app.schemas.embeddings import VisualEmbeddingRequest, VisualEmbeddingResponse
-from deploy.containers.download_embedding_model import WEIGHTS_SHA256, digest
+from app.services import index_identity
+from deploy.containers.download_embedding_model import digest
 
 logger = logging.getLogger(__name__)
-MODEL_ID = "Qwen/Qwen3-VL-Embedding-2B"
-EMBEDDING_DIM = 2048
-MAX_PIXELS = 768 * 32 * 32
-MAX_LENGTH = 4096
-SCRIPT_SHA256 = "8ffa74a1a6bb759610c57865ea416fd4daf9936cb787520e1112a3e1d547f36a"
+MODEL_ID = index_identity.QWEN_MODEL_ID
+EMBEDDING_DIM = index_identity.QWEN_EMBEDDING_DIM
+MAX_PIXELS = index_identity.QWEN_MAX_PIXELS
+MAX_LENGTH = index_identity.QWEN_MAX_LENGTH
+SCRIPT_SHA256 = index_identity.QWEN_RUNTIME_SHA256
+WEIGHTS_SHA256 = index_identity.QWEN_WEIGHTS_SHA256
 
 
 def _open_supported_image(source: BinaryIO) -> Image.Image:
@@ -151,6 +153,7 @@ def create_app() -> FastAPI:
                 "model": MODEL_ID,
                 "dim": EMBEDDING_DIM,
                 "weights_sha256": WEIGHTS_SHA256,
+                "runtime_sha256": SCRIPT_SHA256,
                 "max_pixels": MAX_PIXELS,
                 "max_length": MAX_LENGTH,
             },

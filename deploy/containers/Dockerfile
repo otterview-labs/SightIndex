@@ -8,7 +8,9 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --registry="${NPM_REGISTRY}" --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run build
+RUN node --test scripts/test-reid.mjs scripts/test-search.mjs \
+      scripts/test-observations.mjs scripts/test-video-playback.mjs \
+    && npm run build
 
 FROM ${TORCH_IMAGE} AS runtime
 ARG PIP_INDEX_URL=https://pypi.org/simple
@@ -17,7 +19,7 @@ LABEL org.opencontainers.image.title="SightIndex" \
       org.opencontainers.image.revision="${SOURCE_REVISION}"
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential python3-dev libglib2.0-0 libgl1 \
+    && apt-get install -y --no-install-recommends build-essential python3-dev libglib2.0-0 libgl1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY deploy/containers/requirements.txt /tmp/sightindex-requirements.txt
 RUN python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
@@ -42,9 +44,11 @@ WORKDIR /opt/sightindex
 COPY app/ app/
 COPY main.py pyproject.toml ./
 COPY deploy/containers/healthcheck.py healthcheck.py
+COPY deploy/containers/verify.py deployment_verify.py
 COPY deploy/agx/reid_service/ deploy/agx/reid_service/
 COPY --from=frontend /build/dist/ frontend/dist/
-RUN python -m pip freeze > /opt/sightindex/image-requirements.txt
+RUN mkdir -p /opt/sightindex/deploy/agx/reid_service/sapiensid/tasks/sapiensID/src/aligners/keypoint_predictor/pretrained_models/aligners/dfa_mobilenetv4_medium \
+    && python -m pip freeze > /opt/sightindex/image-requirements.txt
 USER sightindex
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

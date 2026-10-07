@@ -8,6 +8,7 @@ export type CountingLineConfig = Schemas["CountingLineConfig"];
 export type CountSummary = Schemas["CountSummary"];
 export type StreamActionResponse = Schemas["StreamActionResponse"];
 export type VideoProcessResponse = Schemas["VideoProcessResponse"];
+export type VideoPlaybackRead = Schemas["VideoPlaybackRead"];
 
 export type ImageRead = Schemas["ImageRead"];
 export type PersonCropRead = Schemas["PersonCropRead"];

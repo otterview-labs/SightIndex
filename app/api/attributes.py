@@ -15,6 +15,7 @@ from app.schemas.attributes import (
 )
 from app.services.appearance_attributes import AppearanceAttributeService
 from app.services.attribute_backfill import DurableAttributeBackfillService
+from app.services.attribute_failures import classify_attribute_failure, stored_attribute_failure
 from app.services.observation_index import ObservationIndexService
 from app.services.stature import StatureService
 from app.services.structured_attributes import StructuredAttributeService
@@ -28,6 +29,7 @@ UploadImage = Annotated[UploadFile, File(...)]
 def retry_attribute_job(crop_id: uuid.UUID, db: DBSession, settings: AppSettings) -> dict[str, str]:
     from app.services.vector_index_queue import (
         ATTRIBUTE_TARGET,
+        AttributeRetryConflict,
         VectorQueueFullError,
         attribute_queue,
     )
@@ -40,17 +42,21 @@ def retry_attribute_job(crop_id: uuid.UUID, db: DBSession, settings: AppSettings
     if (crop.attributes or {}).get("source") == "vlm":
         return {"status": "already_completed"}
     try:
-        attribute_queue.enqueue_in_session(db, ATTRIBUTE_TARGET, crop_id, settings)
+        status = attribute_queue.retry_failed_attribute_in_session(db, crop_id, settings)
         db.commit()
     except VectorQueueFullError as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="Attribute queue is full; retry later") from exc
-    attribute_queue.wake(settings)
-    return {"status": "queued"}
+    except AttributeRetryConflict as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if status == "queued":
+        attribute_queue.wake(settings)
+    return {"status": status}
 
 
 @router.get("/jobs")
-def attribute_jobs(db: DBSession) -> dict[str, object]:
+def attribute_jobs(db: DBSession, settings: AppSettings) -> dict[str, object]:
     """Live coverage plus durable failures; an old backfill checkpoint is not live coverage."""
     pending = db.scalar(
         select(func.count())
@@ -75,11 +81,26 @@ def attribute_jobs(db: DBSession) -> dict[str, object]:
         .order_by(VectorIndexJob.updated_at.desc())
         .limit(50)
     )
+    from app.services.vector_index_queue import ATTRIBUTE_TARGET, attribute_queue
+
+    queue = {"pending": 0, "running": 0, "failed": 0}
+    queue.update(dict(counts.all()))
     return {
         "pending_crops": int(pending or 0),
-        "queue": dict(counts.all()),
+        "queue": queue,
+        "worker_configured": attribute_queue.target_enabled(ATTRIBUTE_TARGET, settings),
+        "manual_retry_policy": "one_attempt_preserving_failure_count",
         "failures": [
-            {"crop_id": str(job.object_id), "attempts": job.attempts, "error": job.last_error}
+            {
+                "crop_id": str(job.object_id),
+                "attempts": job.attempts,
+                "error": stored_attribute_failure(job.last_error).message,
+                "error_code": stored_attribute_failure(job.last_error).code,
+                "retryable": stored_attribute_failure(job.last_error).retryable,
+                "retry_budget_consistent": job.attempts
+                > settings.vector_index_background_max_retries,
+                "updated_at": job.updated_at,
+            }
             for job in failures
         ],
     }
@@ -101,8 +122,11 @@ def analyze_attributes(
             object_type=object_type,
             bbox=service.parse_bbox_json(bbox_json),
         )
-    except (ValueError, VLMRuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid structured analysis input") from exc
+    except VLMRuntimeError as exc:
+        failure = classify_attribute_failure(exc)
+        raise HTTPException(status_code=400, detail=failure.message) from exc
     return StructuredAnalyzeResponse(count=1, items=[item])
 
 
@@ -125,7 +149,9 @@ def analyze_person_crop_attributes(
             persist=persist,
         )
     except VLMRuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400, detail=classify_attribute_failure(exc).message
+        ) from exc
     return PersonCropAttributeResponse(crop_id=str(crop_id), attributes=attributes)
 
 

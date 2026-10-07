@@ -47,3 +47,10 @@ frontend/*.tsbuildinfo
 # SapiensID weights: 1.5GB, fetched at deploy time
 data/models/
 :memory:.ses
+
+# Private manual verdicts/evaluation results are not source or synthetic templates.
+data/reports/
+/reid-calibration-report*.json
+/reid-feedback*.csv
+/docs/overall-effect-assessment-20260908.md
+/docs/overall-effect-assessment-20260908.docx

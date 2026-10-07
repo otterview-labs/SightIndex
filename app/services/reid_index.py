@@ -17,6 +17,7 @@ from app.config.settings import Settings
 from app.models.media import Image, PersonCrop
 from app.models.vectors import VectorIndexCapacityLock, VLEmbedding
 from app.schemas.reid import ReidMatchItem
+from app.services.index_identity import reid_index_fingerprint
 from app.services.observation_index import ObservationIndexService
 from app.services.reid import ReidEmbeddingService, ReidRuntimeError
 from app.services.vector_index import MilvusVectorIndex, VectorIndexError
@@ -246,15 +247,10 @@ class ReidIndexService:
         markers stop counting as coverage and their crops surface as pending again.
         """
 
-        return "|".join(
-            [
-                self.settings.reid_model,
-                self.settings.reid_checkpoint_revision,
-                str(self.settings.reid_embedding_dim),
-                self.settings.reid_preprocess_version,
-                self.index.namespace_identity,
-                self.index._collection_name(REID_OBJECT_TYPE),
-            ]
+        return reid_index_fingerprint(
+            self.settings,
+            namespace=self.index.namespace_identity,
+            collection=self.index._collection_name(REID_OBJECT_TYPE),
         )
 
     # -- indexing ---------------------------------------------------------------------------

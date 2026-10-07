@@ -29,6 +29,7 @@ import type {
   SemanticSearchStatus,
   StreamActionResponse,
   VideoProcessResponse,
+  VideoPlaybackRead,
   VideoStream,
   VideoStreamCreate,
   VisualSearchRequest,
@@ -72,6 +73,8 @@ export const images = {
   listWithCrops: (limit = 60, offset = 0) =>
     api<ImageRead[]>(`/api/images${queryString({ limit, offset, has_crops: true })}`),
   get: (id: string) => api<ImageRead>(`/api/images/${id}`),
+  playback: (id: string, signal?: AbortSignal) =>
+    api<VideoPlaybackRead>(`/api/images/${encodeURIComponent(id)}/playback`, { signal }),
   process: (id: string) =>
     api<PersonCropRead[]>(`/api/images/${id}/process`, { method: "POST" }),
   upload: (body: FormData) =>
@@ -82,6 +85,8 @@ export const crops = {
   list: (limit = 80, offset = 0) =>
     api<PersonCropRead[]>(`/api/person-crops${queryString({ limit, offset })}`),
   get: (cropId: string) => api<PersonCropRead>(`/api/person-crops/${cropId}`),
+  playback: (cropId: string, signal?: AbortSignal) =>
+    api<VideoPlaybackRead>(`/api/person-crops/${encodeURIComponent(cropId)}/playback`, { signal }),
 };
 
 export const media = {

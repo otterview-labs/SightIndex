@@ -4,14 +4,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 
 from app.api.deps import AppSettings, DBSession
-from app.models.media import PersonCrop
+from app.models.media import Image, PersonCrop, VideoAsset
 from app.schemas.media import (
     ImageRead,
     MediaCounts,
     PersonCropRead,
     StreamActionResponse,
+    VideoPlaybackRead,
     VideoProcessResponse,
     VideoStreamCountingLineUpdate,
     VideoStreamCreate,
@@ -23,6 +25,8 @@ from app.services.statistics import StatisticsService
 from app.services.storage import StorageService
 from app.services.stream_runtime import stream_runtime
 from app.services.vector_index_queue import VectorQueueFullError
+from app.services.video_playback import video_playback_for_image
+from app.services.video_preparation import VideoPreparationError
 from app.services.video_processing import (
     VideoProcessingBackpressureError,
     VideoProcessingService,
@@ -109,6 +113,47 @@ def list_person_crops(
     )
 
 
+@router.get("/images/{image_id}/playback", response_model=VideoPlaybackRead)
+def get_image_playback(
+    image_id: uuid.UUID,
+    db: DBSession,
+    settings: AppSettings,
+) -> VideoPlaybackRead:
+    """Locate an extracted frame in its stored source video, when provenance exists."""
+
+    image = db.get(Image, image_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    asset = (
+        db.scalar(select(VideoAsset).where(VideoAsset.playback_video_url == image.source_video_url))
+        if image.source_video_url
+        else None
+    )
+    return video_playback_for_image(image, settings, asset)
+
+
+@router.get("/person-crops/{crop_id}/playback", response_model=VideoPlaybackRead)
+def get_person_crop_playback(
+    crop_id: uuid.UUID,
+    db: DBSession,
+    settings: AppSettings,
+) -> VideoPlaybackRead:
+    """Resolve a crop through its actual parent frame, not its filename or timestamp."""
+
+    crop = db.get(PersonCrop, crop_id)
+    if crop is None:
+        raise HTTPException(status_code=404, detail="Person crop not found")
+    image = db.get(Image, crop.image_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail="Source image not found")
+    asset = (
+        db.scalar(select(VideoAsset).where(VideoAsset.playback_video_url == image.source_video_url))
+        if image.source_video_url
+        else None
+    )
+    return video_playback_for_image(image, settings, asset)
+
+
 @router.get("/person-crops/{crop_id}", response_model=PersonCropRead)
 def get_person_crop(crop_id: uuid.UUID, db: DBSession) -> PersonCropRead:
     """One crop by id, so a page can show the image a search was run from."""
@@ -170,13 +215,75 @@ def upload_video(
     except VideoProcessingBackpressureError as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail=exc.api_detail()) from exc
+    except VideoPreparationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.api_detail()) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/videos/{video_id}/clips")
-def list_video_clips(video_id: uuid.UUID) -> dict[str, object]:
-    return {"video_id": str(video_id), "items": []}
+def list_video_clips(
+    video_id: uuid.UUID,
+    db: DBSession,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    """Read actual prepared-upload frames, never imply a legacy video association exists."""
+    asset = db.get(VideoAsset, video_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Video asset not found")
+    statement = select(Image).where(Image.source_video_url == asset.playback_video_url)
+    images = (
+        list(
+            db.scalars(
+                statement.order_by(Image.video_offset_seconds, Image.created_at, Image.id)
+                .offset(offset)
+                .limit(limit)
+            )
+        )
+        if asset.playback_video_url
+        else []
+    )
+    total = (
+        db.scalar(select(func.count()).select_from(statement.subquery()))
+        if asset.playback_video_url
+        else 0
+    )
+    crops = (
+        list(
+            db.scalars(
+                select(PersonCrop).where(PersonCrop.image_id.in_([image.id for image in images]))
+            )
+        )
+        if images
+        else []
+    )
+    crops_by_image: dict[uuid.UUID, list[str]] = {}
+    for crop in crops:
+        crops_by_image.setdefault(crop.image_id, []).append(str(crop.id))
+    return {
+        "video_id": str(asset.id),
+        "original_video_url": asset.original_video_url,
+        "video_url": asset.playback_video_url,
+        "compatibility_status": asset.preparation_status,
+        "processing_status": asset.processing_status,
+        "reason": asset.reason,
+        "has_audio": asset.has_audio,
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+        "items": [
+            {
+                "image_id": str(image.id),
+                "image_url": image.image_url,
+                "offset_seconds": image.video_offset_seconds,
+                "captured_at": image.captured_at,
+                "crop_ids": crops_by_image.get(image.id, []),
+            }
+            for image in images
+        ],
+    }
 
 
 @router.post("/streams", response_model=VideoStreamRead)

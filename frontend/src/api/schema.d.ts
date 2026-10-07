@@ -253,6 +253,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/images/{image_id}/playback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Image Playback
+         * @description Locate an extracted frame in its stored source video, when provenance exists.
+         */
+        get: operations["get_image_playback_api_images__image_id__playback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/person-crops/{crop_id}/playback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Person Crop Playback
+         * @description Resolve a crop through its actual parent frame, not its filename or timestamp.
+         */
+        get: operations["get_person_crop_playback_api_person_crops__crop_id__playback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/person-crops/{crop_id}": {
         parameters: {
             query?: never;
@@ -314,7 +354,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Video Clips */
+        /**
+         * List Video Clips
+         * @description Read actual prepared-upload frames, never imply a legacy video association exists.
+         */
         get: operations["list_video_clips_api_videos__video_id__clips_get"];
         put?: never;
         post?: never;
@@ -3154,10 +3197,50 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /**
+         * VideoPlaybackRead
+         * @description A verified stored-video location, or an explicit reason playback is unavailable.
+         */
+        VideoPlaybackRead: {
+            /** Available */
+            available: boolean;
+            /** Source Type */
+            source_type: string;
+            /** Video Url */
+            video_url?: string | null;
+            /** Offset Seconds */
+            offset_seconds?: number | null;
+            /** Captured At */
+            captured_at?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Video Id */
+            video_id?: string | null;
+            /** Original Video Url */
+            original_video_url?: string | null;
+            /**
+             * Compatibility Status
+             * @default unknown
+             */
+            compatibility_status: string;
+            /** Has Audio */
+            has_audio?: boolean | null;
+        };
         /** VideoProcessResponse */
         VideoProcessResponse: {
             /** Video Url */
             video_url: string;
+            /** Video Id */
+            video_id?: string | null;
+            /** Original Video Url */
+            original_video_url?: string | null;
+            /**
+             * Compatibility Status
+             * @default unknown
+             */
+            compatibility_status: string;
+            /** Has Audio */
+            has_audio?: boolean | null;
             /** Frame Interval Seconds */
             frame_interval_seconds: number;
             /** Frames Read */
@@ -3933,6 +4016,68 @@ export interface operations {
             };
         };
     };
+    get_image_playback_api_images__image_id__playback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoPlaybackRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_person_crop_playback_api_person_crops__crop_id__playback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                crop_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoPlaybackRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_person_crop_api_person_crops__crop_id__get: {
         parameters: {
             query?: never;
@@ -4041,7 +4186,10 @@ export interface operations {
     };
     list_video_clips_api_videos__video_id__clips_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path: {
                 video_id: string;

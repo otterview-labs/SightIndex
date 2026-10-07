@@ -1,6 +1,10 @@
 -r requirements.agx.txt
 -r requirements.face-cuda.txt
 
+# Mandatory deployment acceptance runs an isolated FastAPI TestClient smoke.
+# Do not rely on the developer extras or an incidental transitive dependency.
+httpx>=0.27,<1
+
 # Unlike the Jetson path described in requirements.agx.txt, this x86_64 profile
 # installs PyTorch and torchvision into a fresh virtual environment through
 # deploy/rtx5090/install_or_update.sh. Keeping them out of this aggregate lets

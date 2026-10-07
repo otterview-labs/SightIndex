@@ -20,6 +20,18 @@ class Settings(BaseSettings):
     media_retention_days: int = Field(default=30, ge=1, le=3660)
     upload_image_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1)
     upload_video_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1)
+    # Opt-in only: prepare new uploads for browser replay without changing old recordings.
+    video_preparation_enabled: bool = False
+    video_ffmpeg_binary: str = "ffmpeg"
+    video_ffprobe_binary: str = "ffprobe"
+    video_preparation_timeout_seconds: float = Field(default=120.0, ge=1.0, le=600.0)
+    video_probe_timeout_seconds: float = Field(default=10.0, ge=0.1, le=60.0)
+    video_preparation_max_duration_seconds: float = Field(default=300.0, gt=0.0, le=3600.0)
+    video_preparation_max_pixels: int = Field(default=1920 * 1080, ge=1, le=3840 * 2160)
+    video_preparation_max_output_bytes: int = Field(default=128 * 1024 * 1024, ge=1)
+    video_preparation_min_free_bytes: int = Field(default=512 * 1024 * 1024, ge=0)
+    video_preparation_threads: int = Field(default=2, ge=1, le=8)
+    video_preparation_include_audio: bool = False
     upload_image_max_pixels: int = Field(default=25_000_000, ge=1)
     public_base_url: str = "http://localhost:8000"
     auto_create_tables: bool = True

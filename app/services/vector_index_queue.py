@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from types import TracebackType
-from typing import Self
+from typing import Literal, Self
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +18,7 @@ from app.config.settings import Settings, get_settings
 from app.db.session import SessionLocal
 from app.models.media import Image, PersonCrop
 from app.models.vectors import VectorIndexCapacityLock, VectorIndexJob
+from app.services.attribute_failures import classify_attribute_failure
 from app.services.embeddings import EmbeddingRuntimeError
 from app.services.reid_index import BATCH_SIZE as REID_BATCH_SIZE
 from app.services.reid_index import REID_OBJECT_TYPE, BatchResult
@@ -39,6 +40,10 @@ class VectorQueueFullError(RuntimeError):
 
 class LeaseLostError(RuntimeError):
     """Raised when this worker can no longer prove ownership of a claimed job."""
+
+
+class AttributeRetryConflict(RuntimeError):
+    """Safe, explicit recovery failure; no job evidence has been discarded."""
 
 
 @dataclass(frozen=True)
@@ -258,7 +263,7 @@ class VectorIndexQueue:
         additions_by_target: dict[str, int] = {}
         for request in enabled_requests:
             row = existing.get(request)
-            if row is None or row.status == "failed":
+            if row is None or (row.status == "failed" and request[0] != ATTRIBUTE_TARGET):
                 additions_by_target[request[0]] = additions_by_target.get(request[0], 0) + 1
 
         for target, additions in additions_by_target.items():
@@ -278,9 +283,15 @@ class VectorIndexQueue:
                 )
 
         now = local_now(settings)
+        queued = False
         for target, object_id in enabled_requests:
             row = existing.get((target, object_id))
             if row is not None:
+                if row.status == "failed" and target == ATTRIBUTE_TARGET:
+                    # Capture/reconciliation is not explicit recovery authorization. Keep
+                    # terminal evidence and use retry_failed_attribute_in_session instead.
+                    continue
+                queued = True
                 if row.status == "failed":
                     row.status = "pending"
                     row.attempts = 0
@@ -290,6 +301,7 @@ class VectorIndexQueue:
                     row.lease_expires_at = None
                     db.add(row)
                 continue
+            queued = True
             db.add(
                 VectorIndexJob(
                     target=target,
@@ -298,7 +310,7 @@ class VectorIndexQueue:
                     next_run_at=now,
                 )
             )
-        return True
+        return queued
 
     def _lock_capacity_targets_in_session(
         self,
@@ -334,6 +346,74 @@ class VectorIndexQueue:
         """Stage one job in an existing transaction."""
 
         return self.enqueue_many_in_session(db, [(target, object_id)], settings)
+
+    def retry_failed_attribute_in_session(
+        self,
+        db: Session,
+        crop_id: uuid.UUID,
+        settings: Settings,
+    ) -> Literal["queued", "already_queued", "in_progress"]:
+        """Grant one explicit attempt to an exhausted job, preserving prior evidence.
+
+        Capacity is serialized with normal enqueue. The conditional UPDATE cannot steal a
+        running lease or reactivate a job twice. Keeping cumulative attempts means a further
+        failure remains terminal under the unchanged automatic retry policy.
+        """
+
+        if not self.target_enabled(ATTRIBUTE_TARGET, settings):
+            raise AttributeRetryConflict("Background VLM worker is disabled")
+        db.flush()
+        self._lock_capacity_targets_in_session(db, (ATTRIBUTE_TARGET,))
+        job = db.scalar(
+            select(VectorIndexJob)
+            .where(VectorIndexJob.target == ATTRIBUTE_TARGET, VectorIndexJob.object_id == crop_id)
+            .execution_options(populate_existing=True)
+        )
+        if job is None:
+            raise AttributeRetryConflict("No failed attribute job exists for this crop")
+        if job.status == "pending":
+            return "already_queued"
+        if job.status == "running":
+            return "in_progress"
+        if job.status != "failed":
+            raise AttributeRetryConflict("Attribute job state needs review")
+        if job.attempts <= settings.vector_index_background_max_retries:
+            raise AttributeRetryConflict(
+                "Attribute retry budget changed; review it before retrying"
+            )
+        active = int(
+            db.scalar(
+                select(func.count())
+                .select_from(VectorIndexJob)
+                .where(
+                    VectorIndexJob.target == ATTRIBUTE_TARGET,
+                    VectorIndexJob.status.in_(ACTIVE_STATUSES),
+                )
+            )
+            or 0
+        )
+        if active >= settings.vector_index_background_max_queue:
+            raise VectorQueueFullError("Attribute queue is full")
+        now = local_now(settings)
+        result = db.execute(
+            update(VectorIndexJob)
+            .where(
+                VectorIndexJob.id == job.id,
+                VectorIndexJob.status == "failed",
+                VectorIndexJob.attempts == job.attempts,
+            )
+            .values(
+                status="pending",
+                next_run_at=now,
+                lease_owner=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise AttributeRetryConflict("Attribute job changed; refresh its state before retrying")
+        return "queued"
 
     def enqueue(self, target: str, object_id: uuid.UUID) -> bool:
         """Persist one standalone job and wake the worker after commit."""
@@ -481,8 +561,9 @@ class VectorIndexQueue:
             except LeaseLostError:
                 logger.warning("Attribute job lost lease: %s", job.id)
             except Exception as exc:
-                logger.exception("Attribute analysis failed for job %s", job.id)
-                self._mark_failed(job, str(exc), settings)
+                failure = classify_attribute_failure(exc)
+                logger.warning("Attribute analysis failed job=%s code=%s", job.id, failure.code)
+                self._mark_failed(job, failure.stored, settings)
 
     def _run_vl_jobs(self, jobs: list[ClaimedVectorIndexJob], settings: Settings) -> None:
         for job in jobs:

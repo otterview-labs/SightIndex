@@ -112,6 +112,13 @@ API 请求代理到 `http://127.0.0.1:8000`。
 
 ## 部署
 
+统一入口为项目根目录的 `bash deploy.sh`，默认容器方案；
+`bash deploy.sh --target rtx5090` 使用 RTX 5090 systemd 方案。模型与私密配置须提前准备，
+可以先运行 `--check` 做不改动服务的预检。完整流程和验收边界见
+[一键部署与验收](docs/one-click-deployment.zh-CN.md)。
+模型也纳入统一入口：支持只读核验、已审查离线包导入及显式下载；版本、授权、
+人脸完整包、ReID 预处理和索引迁移见[模型部署说明](docs/model-deployment.zh-CN.md)。
+
 原有部署资源采用由 systemd 管理的源码构建方式，并通过 Docker Compose 管理
 PostgreSQL 和可选的 Milvus。另提供[独立镜像部署入口](deploy/containers/README.md)，
 包含多阶段应用 Dockerfile、隔离的数据库与向量库，以及显式启用的 GPU ReID 服务。

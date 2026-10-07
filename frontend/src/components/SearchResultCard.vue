@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import type { SearchResultItem } from "@/api/types";
+import VideoPlaybackButton from "@/components/VideoPlaybackButton.vue";
 import { structuredAttributeChips } from "@/utils/attributes";
 import { fmtTime, formatScore, shortId, shortText } from "@/utils/format";
 
@@ -71,6 +72,11 @@ const hasRerankScore = computed(
         </span>
       </div>
       <p v-if="item.rerank_reason">{{ item.rerank_reason }}</p>
+      <VideoPlaybackButton
+        v-if="item.crop_id || item.image_id"
+        :crop-id="item.crop_id || undefined"
+        :image-id="item.crop_id ? undefined : item.image_id || undefined"
+      />
     </div>
   </article>
 </template>

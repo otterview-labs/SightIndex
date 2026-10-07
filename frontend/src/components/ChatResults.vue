@@ -25,6 +25,7 @@ export interface ChatResultItem {
 <script setup lang="ts">
 import { computed } from "vue";
 
+import VideoPlaybackButton from "@/components/VideoPlaybackButton.vue";
 import { fmtTime, formatScore, shortId } from "@/utils/format";
 
 const props = defineProps<{ items: ChatResultItem[] }>();
@@ -67,26 +68,31 @@ function identifier(item: ChatResultItem): string {
 
 <template>
   <div class="chat-results">
-    <component
-      :is="card.url ? 'a' : 'article'"
+    <article
       v-for="(card, index) in cards"
       :key="index"
       class="chat-result-card"
-      v-bind="card.url ? { href: card.url, target: '_blank', rel: 'noreferrer' } : {}"
     >
-      <img
+      <a
         v-if="card.url"
-        :src="card.url"
-        :alt="card.alt"
-        loading="lazy"
-        decoding="async"
-      />
+        :href="card.url"
+        target="_blank"
+        rel="noreferrer"
+        :aria-label="`放大查看${card.alt}`"
+      >
+        <img :src="card.url" :alt="card.alt" loading="lazy" decoding="async" />
+      </a>
       <div v-else class="chat-result-placeholder">{{ card.placeholder }}</div>
       <div class="media-meta">
         <strong>{{ card.label }}</strong>
         <span>{{ card.identifier }}</span>
         <span>{{ card.time }}</span>
+        <VideoPlaybackButton
+          v-if="card.item.crop_id || card.item.image_id"
+          :crop-id="card.item.crop_id || undefined"
+          :image-id="card.item.crop_id ? undefined : card.item.image_id || undefined"
+        />
       </div>
-    </component>
+    </article>
   </div>
 </template>

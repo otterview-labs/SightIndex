@@ -47,13 +47,21 @@ def _ensure_compatible_schema() -> None:
     table_names = inspector.get_table_names()
     if "images" in table_names:
         image_columns = {column["name"] for column in inspector.get_columns("images")}
-        if "processed_at" not in image_columns:
-            column_type = (
-                "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
-            )
-            with engine.begin() as connection:
+        timestamp_type = (
+            "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+        )
+        offset_type = "DOUBLE PRECISION" if engine.dialect.name == "postgresql" else "FLOAT"
+        # Additive migration: no inference, backfill, or index rebuild for older frames.
+        with engine.begin() as connection:
+            for column_name, column_type in (
+                ("processed_at", timestamp_type),
+                ("source_video_url", "VARCHAR"),
+                ("video_offset_seconds", offset_type),
+            ):
+                if column_name in image_columns:
+                    continue
                 connection.execute(
-                    text(f"ALTER TABLE images ADD COLUMN processed_at {column_type}")
+                    text(f"ALTER TABLE images ADD COLUMN {column_name} {column_type}")
                 )
     if "crop_face_extractions" in table_names:
         face_cache_columns = {
