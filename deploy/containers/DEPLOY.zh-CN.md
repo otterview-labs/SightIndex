@@ -43,8 +43,10 @@ bash /data/sightindex-bj-test/deploy.sh \
 
 北京实例(2026-10 现状):SSH 经 FRP 入口登录,公网中继由 `frpc-110` 提供;
 入口与中继地址、账号均保存在实例私密运维笔记中,不写入仓库。
-当前运行 base+reid(`.env`,视觉嵌入 provider 未启用),镜像
-`sightindex:20261007-223328-a2b530d`;完整栈历史配置 `.env.semantic-search-v1` 仍在。
+2026-10-08 12:32 起运行 base+reid+embedding+semantic(release
+`20261008-123219-c939ba5`,镜像仍为 `sightindex:20261007-223328-a2b530d`),
+96 个存量裁剪已重建语义索引;回退 = 删 `.env` 中 `QWEN_*`/`SEMANTIC_*` 键后
+`manage.sh up base reid`。
 
 ## 发新版本
 
