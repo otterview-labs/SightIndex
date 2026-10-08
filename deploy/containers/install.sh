@@ -7,12 +7,15 @@
 # normal deploy.sh path (release registration, image build, manage.sh up).
 #
 # Usage:
-#   install.sh [--root DIR] [--stacks "base [reid]"] [--source DIR]
-#              [--pip-mirror URL] [--npm-mirror URL] [--no-mirror]
+#   install.sh [--root DIR] [--stacks "base [reid] [embedding] [semantic]"]
+#              [--source DIR] [--pip-mirror URL] [--npm-mirror URL] [--no-mirror]
 #              [--offline BUNDLE.tar]
+#              [--embedding-url URL] [--embedding-api-key KEY] [--embedding-image REF]
 #
 #   --root        deployment root (default $SIGHTINDEX_ROOT or /data/sightindex-bj-test)
-#   --stacks      stacks to bring up (default: base; add reid on GPU machines)
+#   --stacks      stacks to bring up (default: base; add reid on GPU machines;
+#                 embedding = bundled Qwen3-VL embedding container (GPU, +10 GiB RAM);
+#                 semantic = text-to-image search on the API)
 #   --source      source checkout to deploy (default: the checkout holding this script)
 #   --pip-mirror  PyPI mirror forwarded to the image build (default: Tsinghua mirror)
 #   --npm-mirror  npm registry forwarded to the image build (default: npmmirror.com)
@@ -20,11 +23,20 @@
 #   --offline     install from a bundle produced by make_offline_bundle.sh; no
 #                 network beyond the bundle, images are docker-loaded, models
 #                 copied, build skipped
+#   --embedding-url  use an existing embedding service instead of the bundled
+#                 container; the endpoint must implement the SightIndex contract
+#                 (POST {url}/api/embeddings/visual, Bearer/X-API-Key auth).
+#                 Adds the embedding-external + semantic stacks automatically
+#                 and drops the local GPU requirement
+#   --embedding-api-key  API key for --embedding-url (or generated for the bundled one)
+#   --embedding-image   explicit image reference for the bundled embedding container
+#                 (default: discovered among loaded images)
 #
 # Examples:
-#   bash deploy/containers/install.sh                          # online, CN mirrors
-#   bash deploy/containers/install.sh --stacks "base reid"     # GPU machine
-#   bash deploy/containers/install.sh --offline sightindex-offline-20260927.tar
+#   bash deploy/containers/install.sh                                       # online, CN mirrors
+#   bash deploy/containers/install.sh --stacks "base reid"                  # GPU machine
+#   bash deploy/containers/install.sh --stacks "base reid embedding semantic" --offline bundle.tar
+#   bash deploy/containers/install.sh --offline bundle.tar --embedding-url http://10.0.0.5:18032
 
 set -euo pipefail
 
@@ -34,9 +46,12 @@ SOURCE=""
 PIP_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
 NPM_MIRROR="https://registry.npmmirror.com"
 OFFLINE_BUNDLE=""
+EMBEDDING_URL=""
+EMBEDDING_API_KEY=""
+EMBEDDING_IMAGE_OVERRIDE=""
 
 usage() {
-  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -49,6 +64,9 @@ while [ $# -gt 0 ]; do
     --npm-mirror) [ $# -ge 2 ] || usage; NPM_MIRROR="$2"; shift 2 ;;
     --no-mirror)  PIP_MIRROR=""; NPM_MIRROR=""; shift ;;
     --offline)    [ $# -ge 2 ] || usage; OFFLINE_BUNDLE="$2"; shift 2 ;;
+    --embedding-url)     [ $# -ge 2 ] || usage; EMBEDDING_URL="$2"; shift 2 ;;
+    --embedding-api-key) [ $# -ge 2 ] || usage; EMBEDDING_API_KEY="$2"; shift 2 ;;
+    --embedding-image)   [ $# -ge 2 ] || usage; EMBEDDING_IMAGE_OVERRIDE="$2"; shift 2 ;;
     -h|--help)    usage ;;
     *)            echo "Unknown argument: $1" >&2; usage ;;
   esac
@@ -57,9 +75,21 @@ done
 fail() { echo "ERROR: $*" >&2; exit 1; }
 warn() { echo "WARNING: $*" >&2; }
 
+if [ -n "$EMBEDDING_URL" ]; then
+  case " $STACKS " in
+    *" embedding "*|*" embedding-external "*)
+      fail "--embedding-url replaces the bundled embedding stack; drop 'embedding' from --stacks" ;;
+  esac
+  STACKS="$STACKS embedding-external semantic"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE="${SOURCE:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-[ -f "$SOURCE/deploy/containers/deploy.sh" ] || fail "no deploy.sh next to install.sh under $SOURCE"
+# Offline installs cut the installer out of the bundle; deploy.sh then comes
+# from the extracted src/, not from next to this script.
+if [ -z "$OFFLINE_BUNDLE" ]; then
+  SOURCE="${SOURCE:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+  [ -f "$SOURCE/deploy/containers/deploy.sh" ] || fail "no deploy.sh next to install.sh under $SOURCE"
+fi
 
 ENV_FILE="$ROOT/.env"
 
@@ -79,7 +109,44 @@ set_env_value() {
   cat "$tmp" > "$ENV_FILE" && rm -f "$tmp"
 }
 
+# Set a key only when it is currently empty (reinstalls keep their secrets).
+set_env_default() {
+  local key="$1" value="$2"
+  [ -n "$(env_value "$key")" ] || set_env_value "$key" "$value"
+}
+
 random_hex() { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+
+# Create $ENV_FILE from a source checkout's .env.example with fresh secrets;
+# deploy.sh keeps an existing env untouched, so pre-creating it here is safe.
+generate_env_file() {
+  local template="$1/deploy/containers/.env.example"
+  [ -f "$template" ] || fail "no .env.example under $1"
+  echo "Generating env file: $ENV_FILE"
+  sed \
+    -e "s#^MEDIA_DIR=.*#MEDIA_DIR=$ROOT/media#" \
+    -e "s#^MODEL_DIR=.*#MODEL_DIR=$ROOT/models#" \
+    -e "s#^CACHE_DIR=.*#CACHE_DIR=$ROOT/cache#" \
+    "$template" > "$ENV_FILE"
+  for key in APP_BASIC_AUTH_PASSWORD POSTGRES_PASSWORD MINIO_ROOT_PASSWORD REID_SERVICE_API_KEY; do
+    set_env_value "$key" "$(random_hex)"
+  done
+  chmod 600 "$ENV_FILE"
+}
+
+# The bundle ships the embedding container as an anonymous image; identify it
+# among everything docker load pulled in by its baked-in environment.
+discover_embedding_image() {
+  local img
+  for img in $(docker images --no-trunc --format '{{.ID}}'); do
+    if docker image inspect "$img" --format '{{json .Config.Env}}' 2>/dev/null \
+      | grep -q 'VISUAL_EMBEDDING_MODEL=/model'; then
+      echo "$img"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # --- preflight --------------------------------------------------------------
 echo "== preflight =="
@@ -93,9 +160,11 @@ else
 fi
 echo "docker + compose OK"
 
-# The compose stack alone declares ~10 GiB of mem_limit for base, plus 6 GiB for reid.
+# The compose stack alone declares ~10 GiB of mem_limit for base, plus 6 GiB for
+# reid and 10 GiB for the bundled embedding container.
 required_mib=10240
 case " $STACKS " in *" reid "*) required_mib=$((required_mib + 6144));; esac
+case " $STACKS " in *" embedding "*) required_mib=$((required_mib + 10240));; esac
 if [ -r /proc/meminfo ]; then
   avail_mib="$(awk '/MemAvailable/ { printf "%d", $2 / 1024 }' /proc/meminfo)"
   if [ "$avail_mib" -lt $((required_mib * 60 / 100)) ]; then
@@ -125,9 +194,15 @@ else
 fi
 
 case " $STACKS " in
-  *" reid "*)
-    command -v nvidia-smi >/dev/null 2>&1 || fail "reid stack requested but nvidia-smi not found"
+  *" reid "*|*" embedding "*)
+    command -v nvidia-smi >/dev/null 2>&1 || fail "reid/embedding stack requested but nvidia-smi not found"
     echo "GPU present: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)"
+    ;;
+esac
+
+case " $STACKS " in
+  *" embedding-external "*)
+    echo "embedding: external service $EMBEDDING_URL (must be reachable from the api container)"
     ;;
 esac
 
@@ -169,21 +244,12 @@ if [ -n "$OFFLINE_BUNDLE" ]; then
   # deploy.sh never overwrites an existing env, so pre-create it with the
   # bundle's image reference; deploy.sh then only registers the release.
   if [ ! -f "$ENV_FILE" ]; then
-    echo "Generating env file: $ENV_FILE"
-    sed \
-      -e "s#^MEDIA_DIR=.*#MEDIA_DIR=$ROOT/media#" \
-      -e "s#^MODEL_DIR=.*#MODEL_DIR=$ROOT/models#" \
-      -e "s#^CACHE_DIR=.*#CACHE_DIR=$ROOT/cache#" \
-      "$STAGE/src/deploy/containers/.env.example" > "$ENV_FILE"
-    for key in APP_BASIC_AUTH_PASSWORD POSTGRES_PASSWORD MINIO_ROOT_PASSWORD REID_SERVICE_API_KEY; do
-      set_env_value "$key" "$(random_hex)"
-    done
+    generate_env_file "$STAGE/src"
     set_env_value SIGHTINDEX_IMAGE "$SIGHTINDEX_IMAGE"
     if [ -n "${REID_CHECKPOINT_REVISION:-}" ]; then
       set_env_value REID_CHECKPOINT_REVISION "$REID_CHECKPOINT_REVISION"
     fi
     case " $STACKS " in *" reid "*) set_env_value REID_ENABLED true;; esac
-    chmod 600 "$ENV_FILE"
   else
     echo "Env file exists, keeping it: $ENV_FILE"
     current_image="$(env_value SIGHTINDEX_IMAGE)"
@@ -196,14 +262,69 @@ if [ -n "$OFFLINE_BUNDLE" ]; then
   fi
 
   DEPLOY_ARGS+=(--source "$STAGE/src" --no-build)
+  DEPLOY_SH="$STAGE/src/deploy/containers/deploy.sh"
+  [ -f "$DEPLOY_SH" ] || fail "bundle is missing deploy.sh under src/"
 else
   DEPLOY_ARGS+=(--source "$SOURCE")
+  DEPLOY_SH="$SOURCE/deploy/containers/deploy.sh"
 fi
+
+# --- embedding / semantic env ------------------------------------------------
+# Runs after offline image loading so the bundled embedding image can be
+# discovered; only fills keys the env file does not already set. Online
+# installs need the env pre-created here because deploy.sh must not come up
+# with half-configured embedding stacks.
+if [ ! -f "$ENV_FILE" ] && [ -z "$OFFLINE_BUNDLE" ]; then
+  case " $STACKS " in
+    *" embedding "*|*" embedding-external "*|*" semantic "*)
+      generate_env_file "$SOURCE" ;;
+  esac
+fi
+
+if [ -n "$EMBEDDING_URL" ]; then
+  set_env_default EXTERNAL_EMBEDDING_URL "$EMBEDDING_URL"
+  [ -z "$EMBEDDING_API_KEY" ] || set_env_default EXTERNAL_EMBEDDING_API_KEY "$EMBEDDING_API_KEY"
+  set_env_default EXTERNAL_EMBEDDING_MODEL "Qwen/Qwen3-VL-Embedding-2B"
+  set_env_default EXTERNAL_EMBEDDING_DIM "2048"
+  set_env_default QWEN_VISUAL_COLLECTION_PREFIX "sightindex_qwen3vl2b_768p_v1"
+fi
+
+case " $STACKS " in
+  *" embedding "*)
+    if [ -n "$EMBEDDING_IMAGE_OVERRIDE" ]; then
+      set_env_value QWEN_EMBEDDING_IMAGE "$EMBEDDING_IMAGE_OVERRIDE"
+    elif [ -z "$(env_value QWEN_EMBEDDING_IMAGE)" ] \
+      || [ "$(env_value QWEN_EMBEDDING_IMAGE)" = "sightindex-embedding:reviewed-release" ]; then
+      ref="$(discover_embedding_image || true)"
+      [ -n "$ref" ] || fail "could not identify the Qwen embedding image; pass --embedding-image REF"
+      set_env_value QWEN_EMBEDDING_IMAGE "$ref"
+      echo "Embedding image: $ref"
+    fi
+    model_dir="$(env_value QWEN_EMBEDDING_MODEL_DIR)"
+    if [ -z "$model_dir" ] || [ ! -d "$model_dir" ]; then
+      model_dir="$(ls -d "$ROOT"/models/qwen3-vl-embedding-2b-* 2>/dev/null | head -1 || true)"
+      [ -n "$model_dir" ] || fail "no $ROOT/models/qwen3-vl-embedding-2b-* model dir; the embedding stack needs the bundled model"
+      set_env_value QWEN_EMBEDDING_MODEL_DIR "$model_dir"
+    fi
+    if [ -z "$EMBEDDING_API_KEY" ]; then
+      set_env_default QWEN_EMBEDDING_API_KEY "$(random_hex)"
+    else
+      set_env_default QWEN_EMBEDDING_API_KEY "$EMBEDDING_API_KEY"
+    fi
+    set_env_default QWEN_VISUAL_COLLECTION_PREFIX "sightindex_qwen3vl2b_768p_v1"
+    ;;
+esac
+
+case " $STACKS " in
+  *" semantic "*)
+    set_env_value SEMANTIC_SEARCH_ENABLED true
+    ;;
+esac
 
 # --- deploy -----------------------------------------------------------------
 echo
 echo "== deploy (stacks: $STACKS) =="
-bash "$SCRIPT_DIR/deploy.sh" "${DEPLOY_ARGS[@]}"
+bash "$DEPLOY_SH" "${DEPLOY_ARGS[@]}"
 
 echo
 echo "Install finished."
@@ -212,3 +333,9 @@ api_port="$(env_value API_PORT)"; api_port="${api_port:-18030}"
 echo "  API:         http://$api_bind:$api_port"
 echo "  credentials: $ENV_FILE -> APP_BASIC_AUTH_USERNAME / APP_BASIC_AUTH_PASSWORD"
 echo "  operations:  bash $ROOT/manage.sh {status|logs|restart}"
+case " $STACKS " in
+  *" semantic "*)
+    echo "  semantic:    enabled; backfill crops uploaded before this install via"
+    echo "               POST /api/search/index/rebuild {\"target\":\"person_crop\",\"limit\":N}"
+    ;;
+esac

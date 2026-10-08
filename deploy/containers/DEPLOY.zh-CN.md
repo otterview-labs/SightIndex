@@ -43,8 +43,10 @@ bash /data/sightindex-bj-test/deploy.sh \
 
 北京实例(2026-10 现状):SSH 经 FRP 入口登录,公网中继由 `frpc-110` 提供;
 入口与中继地址、账号均保存在实例私密运维笔记中,不写入仓库。
-当前运行 base+reid(`.env`,视觉嵌入 provider 未启用),镜像
-`sightindex:20261007-223328-a2b530d`;完整栈历史配置 `.env.semantic-search-v1` 仍在。
+2026-10-08 12:32 起运行 base+reid+embedding+semantic(release
+`20261008-123219-c939ba5`,镜像仍为 `sightindex:20261007-223328-a2b530d`),
+96 个存量裁剪已重建语义索引;回退 = 删 `.env` 中 `QWEN_*`/`SEMANTIC_*` 键后
+`manage.sh up base reid`。
 
 ## 发新版本
 
@@ -83,8 +85,33 @@ bash manage.sh --env-file <文件> up <stacks>   # 指定 env / 组合 stack
 
 stack 组合:`base`(默认,postgres etcd minio milvus api)、`reid`(需
 `REID_ENABLED=true` 且 GPU 容量已核对)、`embedding`(需三个 `QWEN_*` 键)、
-`semantic`(需已完成语义索引回填)。语义检索开关与验收见
-`deploy/containers/README.md` 的语义章节。
+`embedding-external`(需 `EXTERNAL_EMBEDDING_URL`,复用已有嵌入服务)、
+`semantic`(新装机器上传即自动入索引;历史数据需回填,见下)。语义检索开关与
+验收见 `deploy/containers/README.md` 的语义章节。
+
+### 语义检索(embedding)的三种接法
+
+| 接法 | 用法 | 适用 |
+| --- | --- | --- |
+| 包内容器(默认) | `--stacks "base reid embedding semantic"` | 目标机有空闲 GPU + 10G 内存;离线包含镜像与模型,install.sh 自动配齐 `QWEN_*` 键 |
+| 复用已有服务 | `--embedding-url http://<host>:<port> [--embedding-api-key KEY]` | 目标机已有实现 SightIndex 契约的嵌入服务(如另一台 SightIndex embedding 容器);自动转 `embedding-external + semantic`,无需本地 GPU |
+| 已部署后切换 | 把 `EXTERNAL_EMBEDDING_*` 写入 env 后 `manage.sh up base reid embedding-external semantic` | 同上,免重装 |
+
+外部服务契约(必须实现,一般用包内 embedding 容器或 30 行适配层对接自有
+vLLM/网关):`POST {EXTERNAL_EMBEDDING_URL}/api/embeddings/visual`,JSON body
+为 `{"text","instruction"}` 或 `{"image_base64","image_filename"}`,响应
+`{"embedding":[...],"dim":2048}`;设了 key 时带 `Authorization: Bearer` 或
+`X-API-Key`。模型必须是 Qwen3-VL-Embedding 系(dimension 2048),普通对话
+VLM 不能直接当嵌入服务用。
+
+存量媒体入索引(启用 semantic 后跑一次,幂等):
+
+```bash
+curl -X POST http://<api>/api/search/index/rebuild \
+  -H 'Content-Type: application/json' -u sightindex:<密码> \
+  -d '{"target":"person_crop","limit":200}'
+curl http://<api>/api/search/semantic/status -u sightindex:<密码>   # 看 indexed_crops
+```
 
 ## 回退
 
