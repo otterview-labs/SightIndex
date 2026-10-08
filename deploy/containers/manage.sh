@@ -24,12 +24,15 @@
 #              + API visual-embedding wiring against an existing service
 #              (requires EXTERNAL_EMBEDDING_URL in the env file)
 #   semantic  + semantic-search API settings overlay (auto-index on ingest)
+#   vlm       + structured-attribute analysis via an existing OpenAI-
+#              compatible vision model, e.g. Ollama or vLLM
+#              (requires VLM_BASE_URL/VLM_MODEL in the env file)
 #
 # Defaults resolve for /data/sightindex-bj-test; override with SIGHTINDEX_ROOT
 # or the flags. Overlay compose files (compose.embedding.yaml,
-# compose.embedding-external.yaml, compose.semantic-search.yaml) are searched
-# across all releases newest-first, so split releases keep working. Release
-# names must not contain spaces.
+# compose.embedding-external.yaml, compose.semantic-search.yaml,
+# compose.vlm.yaml) are searched across all releases newest-first, so split
+# releases keep working. Release names must not contain spaces.
 
 set -euo pipefail
 
@@ -40,7 +43,7 @@ COMMAND=""
 STACKS=()
 
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -57,7 +60,7 @@ while [ $# -gt 0 ]; do
     up|down|restart|status|logs)
       [ -z "$COMMAND" ] || { echo "Only one command allowed" >&2; exit 2; }
       COMMAND="$1"; shift ;;
-    base|reid|embedding|semantic)
+    base|reid|embedding|semantic|vlm)
       STACKS+=("$1"); shift ;;
     *)
       echo "Unknown argument: $1" >&2; usage ;;
@@ -161,6 +164,18 @@ for stack in ${STACKS[@]+"${STACKS[@]}"}; do
         echo "compose.semantic-search.yaml not found in any release" >&2; exit 1;
       }
       COMPOSE_FILES+=(-f "$overlay") ;;
+    vlm)
+      overlay="$(find_overlay compose.vlm.yaml)" || {
+        echo "compose.vlm.yaml not found in any release" >&2; exit 1;
+      }
+      for key in VLM_BASE_URL VLM_MODEL; do
+        if [ -z "$(env_value "$key")" ]; then
+          echo "$key missing in $ENV_FILE; the vlm stack points the API at an" >&2
+          echo "OpenAI-compatible vision model (e.g. Ollama at http://<host>:11434/v1)" >&2
+          exit 1
+        fi
+      done
+      COMPOSE_FILES+=(-f "$overlay") ;;
     embedding-external)
       overlay="$(find_overlay compose.embedding-external.yaml)" || {
         echo "compose.embedding-external.yaml not found in any release" >&2; exit 1;
@@ -223,7 +238,8 @@ case "$COMMAND" in
     # compose files when present, otherwise services defined only in an overlay
     # (e.g. embedding) would be orphaned by a base-only down.
     down_files=(-f "$BASE_COMPOSE")
-    for overlay_name in compose.embedding.yaml compose.semantic-search.yaml; do
+    for overlay_name in compose.embedding.yaml compose.semantic-search.yaml \
+      compose.embedding-external.yaml compose.vlm.yaml; do
       if overlay="$(find_overlay "$overlay_name")"; then
         down_files+=(-f "$overlay")
       fi

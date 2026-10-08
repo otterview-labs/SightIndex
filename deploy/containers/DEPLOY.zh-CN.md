@@ -11,7 +11,8 @@
 ```bash
 cd <SightIndex 源码目录>        # 注意:必须是源码目录,不是已部署的根目录
 bash deploy/containers/deploy.sh --root /data/sightindex-bj-test --stacks base
-# 事后启用更多 stack: reid(需 REID_ENABLED=true + GPU 核对)、embedding、semantic
+# 事后启用更多 stack: reid(需 REID_ENABLED=true + GPU 核对)、embedding、semantic、
+# vlm(需 VLM_BASE_URL/VLM_MODEL,接已有 OpenAI 兼容视觉模型)
 ```
 
 在**已部署的机器**上:`deploy.sh --source` 默认取当前目录,若在部署根目录
@@ -112,6 +113,29 @@ curl -X POST http://<api>/api/search/index/rebuild \
   -d '{"target":"person_crop","limit":200}'
 curl http://<api>/api/search/semantic/status -u sightindex:<密码>   # 看 indexed_crops
 ```
+
+### 属性解析(vlm)接已有视觉模型
+
+人物裁剪的结构化属性(衣着颜色/帽子/背包等,检索页"解析最近裁剪"按钮)
+需要一个 OpenAI 兼容的**视觉**模型服务;不配则检索页显示"属性解析模型未启用"。
+
+| 用法 | 说明 |
+| --- | --- |
+| `install.sh --vlm-url http://<host>:11434/v1 --vlm-model qwen3-vl:4b` | 新装时自动加 vlm 栈并写 `VLM_*` 键 |
+| env 写 `VLM_BASE_URL`/`VLM_MODEL` 后 `manage.sh up ... vlm` | 已部署后启用 |
+
+- 端点须支持 `POST {VLM_BASE_URL}/chat/completions`(image_url data URL +
+  `response_format: json_object`),Ollama(0.12+)与 vLLM 均可;Ollama 不校验
+  `VLM_API_KEY`,vLLM 按需设置
+- Ollama 默认只听 `127.0.0.1:11434`,容器内访问不到:改
+  `systemctl edit ollama` 加 `Environment="OLLAMA_HOST=0.0.0.0"` 后重启,
+  `VLM_BASE_URL` 填宿主机在 docker 网络的网关地址(如 `http://172.20.0.1:11434/v1`)
+- 分析在后台 worker 进行(每分钟 reconcile 一次未分析裁剪),ingest 不受阻塞;
+  存量裁剪可 `POST /api/attributes/person-crops/backfill` 立即入队,
+  `GET /api/attributes/jobs` 看进度(`pending_crops` 归零即完成)
+- 跨境拉不动 registry.ollama.ai 时,Qwen 官方 GGUF 在 ModelScope 有镜像:
+  下载 `Q4_K_M` 主模型 + `mmproj` 两个文件后
+  `printf 'FROM <主模型.gguf>\nPROJECTOR <mmproj.gguf>\n' > Modelfile && ollama create qwen3-vl:4b -f Modelfile`
 
 ## 回退
 

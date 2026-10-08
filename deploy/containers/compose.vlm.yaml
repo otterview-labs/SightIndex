@@ -1,0 +1,20 @@
+# Point the API at an existing OpenAI-compatible vision model (vLLM,
+# Ollama /v1, ...) for structured-attribute analysis of person crops.
+# The endpoint must serve POST {VLM_BASE_URL}/chat/completions accepting
+# image_url data-URL content and response_format json_object.
+#
+# Attribute analysis runs in the background worker (a reconcile pass picks up
+# un-analyzed crops every minute), so ingest latency is unaffected; the base
+# compose's synchronous on-ingest path stays off.
+#
+# Enable with: manage.sh up base [reid] [embedding|embedding-external] [semantic] vlm
+services:
+  api:
+    environment:
+      VLM_PROVIDER: openai_compatible
+      VLM_BASE_URL: ${VLM_BASE_URL:?set VLM_BASE_URL}
+      VLM_MODEL: ${VLM_MODEL:?set VLM_MODEL}
+      VLM_API_KEY: ${VLM_API_KEY:-ollama}
+      VLM_TIMEOUT_SECONDS: ${VLM_TIMEOUT_SECONDS:-120}
+      VLM_STRUCTURED_BACKGROUND: ${VLM_STRUCTURED_BACKGROUND:-true}
+      VLM_STRUCTURED_ON_INGEST: "false"

@@ -31,12 +31,18 @@
 #   --embedding-api-key  API key for --embedding-url (or generated for the bundled one)
 #   --embedding-image   explicit image reference for the bundled embedding container
 #                 (default: discovered among loaded images)
+#   --vlm-url    point structured-attribute analysis at an existing
+#                 OpenAI-compatible vision model (e.g. Ollama http://<host>:11434/v1);
+#                 adds the vlm stack automatically. Requires --vlm-model
+#   --vlm-model  model name for --vlm-url (e.g. qwen3-vl:4b)
+#   --vlm-api-key  API key for --vlm-url (default: ollama, ignored by Ollama)
 #
 # Examples:
 #   bash deploy/containers/install.sh                                       # online, CN mirrors
 #   bash deploy/containers/install.sh --stacks "base reid"                  # GPU machine
 #   bash deploy/containers/install.sh --stacks "base reid embedding semantic" --offline bundle.tar
 #   bash deploy/containers/install.sh --offline bundle.tar --embedding-url http://10.0.0.5:18032
+#   bash deploy/containers/install.sh --vlm-url http://10.0.0.5:11434/v1 --vlm-model qwen3-vl:4b
 
 set -euo pipefail
 
@@ -49,9 +55,12 @@ OFFLINE_BUNDLE=""
 EMBEDDING_URL=""
 EMBEDDING_API_KEY=""
 EMBEDDING_IMAGE_OVERRIDE=""
+VLM_URL=""
+VLM_MODEL_FLAG=""
+VLM_API_KEY_FLAG=""
 
 usage() {
-  sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -67,6 +76,9 @@ while [ $# -gt 0 ]; do
     --embedding-url)     [ $# -ge 2 ] || usage; EMBEDDING_URL="$2"; shift 2 ;;
     --embedding-api-key) [ $# -ge 2 ] || usage; EMBEDDING_API_KEY="$2"; shift 2 ;;
     --embedding-image)   [ $# -ge 2 ] || usage; EMBEDDING_IMAGE_OVERRIDE="$2"; shift 2 ;;
+    --vlm-url)     [ $# -ge 2 ] || usage; VLM_URL="$2"; shift 2 ;;
+    --vlm-model)   [ $# -ge 2 ] || usage; VLM_MODEL_FLAG="$2"; shift 2 ;;
+    --vlm-api-key) [ $# -ge 2 ] || usage; VLM_API_KEY_FLAG="$2"; shift 2 ;;
     -h|--help)    usage ;;
     *)            echo "Unknown argument: $1" >&2; usage ;;
   esac
@@ -81,6 +93,14 @@ if [ -n "$EMBEDDING_URL" ]; then
       fail "--embedding-url replaces the bundled embedding stack; drop 'embedding' from --stacks" ;;
   esac
   STACKS="$STACKS embedding-external semantic"
+fi
+
+if [ -n "$VLM_URL" ]; then
+  case " $STACKS " in
+    *" vlm "*) ;;
+    *) STACKS="$STACKS vlm" ;;
+  esac
+  [ -n "$VLM_MODEL_FLAG" ] || fail "--vlm-url needs --vlm-model (e.g. qwen3-vl:4b)"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -276,7 +296,7 @@ fi
 # with half-configured embedding stacks.
 if [ ! -f "$ENV_FILE" ] && [ -z "$OFFLINE_BUNDLE" ]; then
   case " $STACKS " in
-    *" embedding "*|*" embedding-external "*|*" semantic "*)
+    *" embedding "*|*" embedding-external "*|*" semantic "*|*" vlm "*)
       generate_env_file "$SOURCE" ;;
   esac
 fi
@@ -287,6 +307,16 @@ if [ -n "$EMBEDDING_URL" ]; then
   set_env_default EXTERNAL_EMBEDDING_MODEL "Qwen/Qwen3-VL-Embedding-2B"
   set_env_default EXTERNAL_EMBEDDING_DIM "2048"
   set_env_default QWEN_VISUAL_COLLECTION_PREFIX "sightindex_qwen3vl2b_768p_v1"
+fi
+
+if [ -n "$VLM_URL" ]; then
+  set_env_default VLM_BASE_URL "$VLM_URL"
+  set_env_default VLM_MODEL "$VLM_MODEL_FLAG"
+  if [ -n "$VLM_API_KEY_FLAG" ]; then
+    set_env_default VLM_API_KEY "$VLM_API_KEY_FLAG"
+  else
+    set_env_default VLM_API_KEY "ollama"
+  fi
 fi
 
 case " $STACKS " in
@@ -337,5 +367,11 @@ case " $STACKS " in
   *" semantic "*)
     echo "  semantic:    enabled; backfill crops uploaded before this install via"
     echo "               POST /api/search/index/rebuild {\"target\":\"person_crop\",\"limit\":N}"
+    ;;
+esac
+case " $STACKS " in
+  *" vlm "*)
+    echo "  vlm:         structured attributes enabled; pending crops are picked up"
+    echo "               by the background worker within a minute (GET /api/attributes/jobs)"
     ;;
 esac
