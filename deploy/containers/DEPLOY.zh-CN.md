@@ -44,10 +44,12 @@ bash /data/sightindex-bj-test/deploy.sh \
 
 北京实例(2026-10 现状):SSH 经 FRP 入口登录,公网中继由 `frpc-110` 提供;
 入口与中继地址、账号均保存在实例私密运维笔记中,不写入仓库。
-2026-10-08 12:32 起运行 base+reid+embedding+semantic(release
+2026-10-08 起运行 base+reid+embedding+semantic+vlm(release
 `20261008-123219-c939ba5`,镜像仍为 `sightindex:20261007-223328-a2b530d`),
-96 个存量裁剪已重建语义索引;回退 = 删 `.env` 中 `QWEN_*`/`SEMANTIC_*` 键后
-`manage.sh up base reid`。
+96 个存量裁剪已重建语义索引并完成属性解析。vlm 栈接宿主机 Ollama
+(已升级 0.40.1;`OLLAMA_HOST=0.0.0.0`,`VLM_BASE_URL=http://172.20.0.1:11434/v1`,
+`VLM_MODEL=qwen2.5vl:3b`,模型用 ModelScope GGUF 目录导入)。回退 = 删 `.env`
+中 `QWEN_*`/`SEMANTIC_*`/`VLM_*` 键后 `manage.sh up base reid`。
 
 ## 发新版本
 
@@ -134,8 +136,12 @@ curl http://<api>/api/search/semantic/status -u sightindex:<密码>   # 看 inde
   存量裁剪可 `POST /api/attributes/person-crops/backfill` 立即入队,
   `GET /api/attributes/jobs` 看进度(`pending_crops` 归零即完成)
 - 跨境拉不动 registry.ollama.ai 时,Qwen 官方 GGUF 在 ModelScope 有镜像:
-  下载 `Q4_K_M` 主模型 + `mmproj` 两个文件后
-  `printf 'FROM <主模型.gguf>\nPROJECTOR <mmproj.gguf>\n' > Modelfile && ollama create qwen3-vl:4b -f Modelfile`
+  把下载的 `Q4_K_M` 主模型与 `mmproj` 两个文件放进同一目录,Modelfile 写
+  `FROM <该目录>` 后 `ollama create <名> -f Modelfile`(新版 Ollama 已移除
+  `PROJECTOR` 指令,目录方式自动挂载 mmproj;Qwen2.5-VL 还需附 ChatML
+  TEMPLATE,否则输出乱码;`PARAMETER keep_alive` 不被 create 接受)。实测
+  Ollama 0.17.5 的 ollamarunner 在 RTX 5060 Ti(Blackwell)上视觉推理输出
+  乱码,升级 0.40.1 后正常
 
 ## 回退
 
@@ -150,6 +156,11 @@ bash manage.sh --env-file .env.semantic-search-v1 \
 
 ## 故障处置记录
 
+- 2026-10-08(二):base+semantic 全组容器再次无残骸消失(非 `down`,卷与
+  网络完好;疑似宿主机上有人跑 `docker-compose --profile reid up -d reid`
+  等未带 env 参数的命令干扰)。规范命令恢复,并顺带启用 vlm 栈:
+  `manage.sh --release releases/20261008-123219-c939ba5 up base reid embedding
+  semantic vlm`,恢复后语义索引 96/96、属性回填 96/96 与删除前一致。
 - 2026-10-08:升级到 release `20261007-223328-a2b530d`(feat/video-playback-deploy:
   视频定位播放 + 部署固化 + 一键 install.sh),`.env` 仅改 `SIGHTINDEX_IMAGE`,
   数据库自动加列(`images.video_url/video_offset_ms`、
