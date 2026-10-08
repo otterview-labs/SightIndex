@@ -16,7 +16,19 @@ class ImageRead(ORMModel):
     location_id: uuid.UUID | None
     location_name: str | None = None
     captured_at: datetime | None
+    video_url: str | None = None
+    video_offset_ms: float | None = None
     created_at: datetime
+
+
+class ImageVideoPosition(BaseModel):
+    """Where a frame sits inside its source video, for seek-and-play in the viewer."""
+
+    image_id: uuid.UUID
+    video_url: str
+    video_offset_ms: float
+    exact: bool
+    source_image_url: str
 
 
 class PersonCropRead(ORMModel):
@@ -71,6 +83,8 @@ class SearchResultItem(BaseModel):
     camera_name: str | None = None
     person_id: uuid.UUID | None = None
     person_name: str | None = None
+    source_video_url: str | None = None
+    video_offset_ms: float | None = None
     attributes: dict[str, Any] | None = None
     labels_zh: dict[str, Any] | None = None
     labels_en: dict[str, Any] | None = None
@@ -100,6 +114,8 @@ class ObservationIndexItem(ORMModel):
     location_name: str | None = None
     captured_at: datetime | None = None
     image_url: str | None = None
+    source_video_url: str | None = None
+    video_offset_ms: float | None = None
     crop_url: str | None = None
     thumbnail_url: str | None = None
     bbox: dict[str, Any] | None = None

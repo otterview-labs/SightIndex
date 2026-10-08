@@ -5,7 +5,8 @@
 本手册是操作速查,不重复其内容。
 
 首次部署的全部步骤(目录、env 生成、release 注册、镜像构建、启动、健康等待)
-可由 `deploy/containers/deploy.sh` 一键执行,手工步骤与之等价:
+可由 `deploy/containers/install.sh`(带前置检查与国内镜像源默认值,支持
+`--offline` 离线包)或 `deploy/containers/deploy.sh` 一键执行,手工步骤与之等价:
 
 ```bash
 cd <SightIndex 源码目录>        # 注意:必须是源码目录,不是已部署的根目录
@@ -40,9 +41,10 @@ bash /data/sightindex-bj-test/deploy.sh \
 | API | 宿主机 `127.0.0.1:18030`;远程走 SSH 转发或既有 FRP 中继 |
 | 凭据 | SSH 与 API Basic Auth 密码只保存在宿主机私密配置与运维笔记中,不写入本文件 |
 
-北京实例(2026-09 现状):SSH 经 FRP 入口登录,公网中继由 `frpc-110` 提供;
+北京实例(2026-10 现状):SSH 经 FRP 入口登录,公网中继由 `frpc-110` 提供;
 入口与中继地址、账号均保存在实例私密运维笔记中,不写入仓库。
-完整栈使用 `.env.semantic-search-v1`(含语义检索与 Qwen 嵌入配置)。
+当前运行 base+reid(`.env`,视觉嵌入 provider 未启用),镜像
+`sightindex:20261007-223328-a2b530d`;完整栈历史配置 `.env.semantic-search-v1` 仍在。
 
 ## 发新版本
 
@@ -97,6 +99,19 @@ bash manage.sh --env-file .env.semantic-search-v1 \
 
 ## 故障处置记录
 
+- 2026-10-08:升级到 release `20261007-223328-a2b530d`(feat/video-playback-deploy:
+  视频定位播放 + 部署固化 + 一键 install.sh),`.env` 仅改 `SIGHTINDEX_IMAGE`,
+  数据库自动加列(`images.video_url/video_offset_ms`、
+  `person_observation_index.source_video_url/video_offset_ms`)。升级后回归:
+  Range 206、851MiB loopback 上传、53MiB 页面上传、新旧数据定位播放全部通过;
+  期间一次 53MiB 上传处理耗时 25 分钟,py-spy 确认为主机 CPU 争抢
+  (宿主机其他业务把 16 核吃满,api 容器仅 2 核),非代码缺陷。
+  验证后清理:删除两个测试视频及其 55 帧/裁剪/观察记录(先
+  `pg_dump` 至 `backups/pre-cleanup-20261008.dump`;Milvus 中残留 55 条 reid
+  悬挂向量,检索代码按缺失跳过,下次换模型重建索引时自然消失);移除调试中继
+  `bj-log-proxy`/`bj-debug-frpc`(临时浏览器通道 39033 已关闭,远程访问回到
+  SSH 转发);半成品 release `20261007-222015-a2b530d` 移至
+  `/home/BKAI/removed-release-20261007-222015-a2b530d` 待删。
 - 2026-09-14:api/embedding/reid 三个容器被定向删除(基础设施、镜像、卷、
   compose 网络完好,`down` 未发生过)。恢复命令即上文完整栈的
   `manage.sh --env-file .env.semantic-search-v1 up base reid embedding semantic`,

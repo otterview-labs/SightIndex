@@ -2,9 +2,15 @@
 
 [English](deployment.md) | [简体中文](deployment.zh-CN.md)
 
-本文档说明本仓库中实际提供的部署资源。主要生产部署路径是从源码构建，并由 systemd
-监管。PostgreSQL 以及启用时的 Milvus 使用 Docker Compose 运行。SightIndex 当前不包含
-应用程序 Dockerfile，也不提供一体化 Compose 技术栈。
+本文档说明本仓库中实际提供的部署资源。两种部署路径并存：
+
+- **容器一键部署**（`deploy/containers/`）：`install.sh` 是零决策入口（前置检查、默认国内
+  镜像源、支持离线包），底层复用 `deploy.sh` 部署引擎；部署完成后的日常运维用 `manage.sh`。
+  详见 [`deploy/containers/README.md`](../deploy/containers/README.md)。
+- **源码 + systemd**：从源码构建并由 systemd 监管，PostgreSQL 以及启用时的 Milvus 使用
+  Docker Compose 运行，即下文的主体内容。
+
+两条路径面向不同场景（隔离测试实例 vs 深度定制的主机部署），不要在同一台宿主机上混用。
 
 ## 部署方案
 

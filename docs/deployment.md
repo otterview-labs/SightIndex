@@ -2,10 +2,18 @@
 
 [English](deployment.md) | [简体中文](deployment.zh-CN.md)
 
-This guide describes the deployment assets that are actually present in this repository. The
-primary production path is a source build supervised by systemd. Docker Compose is used for
-PostgreSQL and, when enabled, Milvus. SightIndex does not currently include an application
-Dockerfile or an all-in-one Compose stack.
+This guide describes the deployment assets that are actually present in this repository. Two
+deployment paths coexist:
+
+- **One-command container deployment** (`deploy/containers/`): `install.sh` is the zero-decision
+  entry point (preflight checks, mirror defaults for restricted networks, offline bundles);
+  it wraps the `deploy.sh` engine, and day-to-day operations go through `manage.sh`. See
+  [`deploy/containers/README.md`](../deploy/containers/README.md).
+- **Source + systemd**: a source build supervised by systemd, with Docker Compose running
+  PostgreSQL and, when enabled, Milvus — the main body of this guide.
+
+The paths target different scenarios (isolated test instance vs deeply customized host); do not
+mix them on the same host.
 
 ## Deployment profile
 

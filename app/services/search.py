@@ -289,6 +289,8 @@ class VisualSearchService:
             image_url=row.image_url,
             crop_url=row.crop_url,
             score=hit.score,
+            source_video_url=row.source_video_url,
+            video_offset_ms=row.video_offset_ms,
             captured_at=row.captured_at,
             location_id=row.location_id,
             location_name=row.location_name,
@@ -421,6 +423,8 @@ class VisualSearchService:
                     image_id=image.id,
                     image_url=image.image_url,
                     score=0.0,
+                    source_video_url=image.video_url,
+                    video_offset_ms=image.video_offset_ms,
                     captured_at=image.captured_at,
                     location_id=image.location_id,
                 )
@@ -522,6 +526,8 @@ class VisualSearchService:
                 image_url=observation.image_url,
                 crop_url=crop.crop_url,
                 score=score,
+                source_video_url=observation.source_video_url,
+                video_offset_ms=observation.video_offset_ms,
                 captured_at=observation.captured_at,
                 location_id=observation.location_id,
                 location_name=observation.location_name,
@@ -574,6 +580,8 @@ class VisualSearchService:
                     image_id=image.id,
                     image_url=image.thumbnail_url or image.image_url,
                     score=scores[image.id],
+                    source_video_url=image.video_url,
+                    video_offset_ms=image.video_offset_ms,
                     captured_at=image.captured_at,
                     location_id=image.location_id,
                 )
@@ -630,6 +638,10 @@ class StructuredSearchService:
                     crop_id=crop.id,
                     image_id=crop.image_id,
                     image_url=observation.image_url if observation else None,
+                    source_video_url=(
+                        observation.source_video_url if observation else None
+                    ),
+                    video_offset_ms=observation.video_offset_ms if observation else None,
                     crop_url=crop.crop_url,
                     score=score,
                     captured_at=(

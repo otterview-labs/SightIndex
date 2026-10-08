@@ -3,8 +3,41 @@
 该入口在宿主机已有其他业务时单独运行 SightIndex，不调用 RTX 5090 systemd 安装脚本，
 不升级系统 Python/Node，不复用生产数据库、Milvus 集合、摄像头或人员数据。
 
-首次部署按本文执行（全部步骤可由 `deploy.sh` 一键完成）；部署完成后的日常
-发版、运维与回退速查见 [DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)。
+首次部署优先用 `install.sh` 一键完成（见下节）；需要逐步控制各环节时按本文其余章节
+手工执行（`deploy.sh` 可一次性完成全部步骤）。部署完成后的日常发版、运维与回退速查见
+[DEPLOY.zh-CN.md](DEPLOY.zh-CN.md)。
+
+## 一键安装 `install.sh`
+
+```bash
+bash deploy/containers/install.sh                          # 在线安装，默认走国内镜像源
+bash deploy/containers/install.sh --stacks "base reid"     # GPU 机器同时启用 ReID
+bash deploy/containers/install.sh --no-mirror              # 直连 pypi.org / npmjs.org
+```
+
+脚本先做前置检查（docker 与 Compose v2、内存——base 栈约需 10 GiB、磁盘、启用 reid 时
+`nvidia-smi`），再调用 `deploy.sh` 完成 env 生成、release 注册、镜像构建、启动和健康等待，
+结束时打印访问地址与密码位置。常用旗标：`--root`（部署根目录）、`--stacks`、
+`--pip-mirror`/`--npm-mirror`（覆盖默认镜像源）、`--source`（指定源码检出）。
+
+### 离线安装
+
+内网机器无法构建镜像时，先在一台已按本文部署成功的机器上产离线包：
+
+```bash
+bash scripts/make_offline_bundle.sh            # 在部署根目录产出 sightindex-offline-<date>.tar
+```
+
+离线包包含 compose 引用的全部镜像（`docker save`）、完整模型目录、最新注册 release 的
+源码副本、`manifest.env`（含 `SIGHTINDEX_IMAGE` 与 `REID_CHECKPOINT_REVISION` 指纹）和
+逐文件校验清单。把 `.tar` 与同名 `-install.sh` 传到目标机器后执行：
+
+```bash
+bash sightindex-offline-<date>-install.sh --offline sightindex-offline-<date>.tar --stacks "base reid"
+```
+
+离线模式跳过构建（`docker load` 镜像 + 复制模型），其余流程与在线一致。更换
+sapiensid checkpoint 后需更新 `REID_CHECKPOINT_REVISION` 并重新核对 `/ready`。
 
 ## 镜像与资源
 

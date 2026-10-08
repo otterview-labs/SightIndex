@@ -103,6 +103,8 @@ class ObservationIndexService:
         )
         row.captured_at = captured_at
         row.image_url = image.thumbnail_url or image.image_url if image else None
+        row.source_video_url = image.video_url if image else None
+        row.video_offset_ms = image.video_offset_ms if image else None
         row.crop_url = crop.crop_url
         row.thumbnail_url = image.thumbnail_url if image else None
         row.bbox = crop.bbox

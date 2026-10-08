@@ -851,6 +851,7 @@ select:focus {
 }
 
 .media-item {
+  position: relative;
   display: block;
   border: 1px solid rgba(216, 224, 236, 0.9);
   border-radius: 8px;
@@ -862,6 +863,33 @@ select:focus {
     transform 150ms ease,
     border-color 150ms ease,
     box-shadow 150ms ease;
+}
+
+/* Sits inside the media-item link overlaying the image; the click is stopped so the
+   link navigation does not fire. */
+.media-locate {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.media-locate:hover,
+.media-locate:focus-visible {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.media-locate:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
 }
 
 .media-item:hover {

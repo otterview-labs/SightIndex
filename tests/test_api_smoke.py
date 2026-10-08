@@ -3132,6 +3132,111 @@ def test_video_upload_processes_frames(monkeypatch, tmp_path):
         assert annotated_path.exists()
 
 
+def test_video_upload_stores_source_video_position(monkeypatch, tmp_path):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    video_path = tmp_path / "position.avi"
+    writer = cv2.VideoWriter(
+        str(video_path),
+        cv2.VideoWriter_fourcc(*"MJPG"),
+        5,
+        (64, 48),
+    )
+    for index in range(4):
+        writer.write(np.full((48, 64, 3), 40 + index * 30, dtype=np.uint8))
+    writer.release()
+
+    main = load_app(monkeypatch, tmp_path, "test-video-position")
+    with TestClient(main.create_app()) as client, video_path.open("rb") as video_file:
+        response = client.post(
+            "/api/videos/upload?frame_interval_seconds=0.2&max_frames=2",
+            files={"file": ("position.avi", video_file, "video/x-msvideo")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    with TestClient(main.create_app()) as client:
+        images = [client.get(f"/api/images/{image_id}").json() for image_id in payload["image_ids"]]
+        positions = [
+            client.get(f"/api/images/{image_id}/video-position").json()
+            for image_id in payload["image_ids"]
+        ]
+
+    assert all(image["video_url"] == payload["video_url"] for image in images)
+    offsets = [image["video_offset_ms"] for image in images]
+    assert offsets[0] == 0.0
+    assert 0.0 < offsets[1] < 1000.0
+    for image, position in zip(images, positions):
+        assert position["exact"] is True
+        assert position["video_url"] == payload["video_url"]
+        assert position["video_offset_ms"] == image["video_offset_ms"]
+        assert position["source_image_url"] == image["image_url"]
+
+
+def test_video_position_fallback_for_legacy_frames(monkeypatch, tmp_path):
+    main = load_app(monkeypatch, tmp_path, "test-video-position-legacy")
+    settings = main.get_settings()
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+    settings.frames_dir.mkdir(parents=True, exist_ok=True)
+    (settings.videos_dir / "legacyvideo.mp4").write_bytes(b"fake-video")
+    (settings.frames_dir / "legacyvideo_20260101000000000000.jpg").write_bytes(b"fake-frame-a")
+    (settings.frames_dir / "legacyvideo_20260101000004000000.jpg").write_bytes(b"fake-frame-b")
+
+    with TestClient(main.create_app()) as client:
+        from app.db.session import SessionLocal
+        from app.models.media import Image as ImageModel
+
+        with SessionLocal() as db:
+            early = ImageModel(
+                image_url="/data/frames/legacyvideo_20260101000000000000.jpg",
+                source_type="video_frame",
+                captured_at=datetime(2026, 1, 1, 0, 0, 0),
+            )
+            late = ImageModel(
+                image_url="/data/frames/legacyvideo_20260101000004000000.jpg",
+                source_type="video_frame",
+                captured_at=datetime(2026, 1, 1, 0, 0, 4),
+            )
+            # A stale exact link (video file removed) must not shadow the heuristic.
+            stale = ImageModel(
+                image_url="/data/frames/legacyvideo_20260101000002000000.jpg",
+                source_type="video_frame",
+                captured_at=datetime(2026, 1, 1, 0, 0, 2),
+                video_url="/data/videos/gone.mp4",
+                video_offset_ms=999.0,
+            )
+            upload = ImageModel(image_url="/data/uploads/plain.jpg", source_type="upload")
+            db.add_all([early, late, stale, upload])
+            db.commit()
+            for row in (early, late, stale, upload):
+                db.refresh(row)
+            ids = {name: row.id for name, row in
+                   (("early", early), ("late", late), ("stale", stale), ("upload", upload))}
+
+        early_position = client.get(f"/api/images/{ids['early']}/video-position")
+        late_position = client.get(f"/api/images/{ids['late']}/video-position")
+        stale_position = client.get(f"/api/images/{ids['stale']}/video-position")
+        upload_position = client.get(f"/api/images/{ids['upload']}/video-position")
+        missing_position = client.get(f"/api/images/{uuid.uuid4()}/video-position")
+
+    assert early_position.status_code == 200
+    assert early_position.json() == {
+        "image_id": str(ids["early"]),
+        "video_url": "/data/videos/legacyvideo.mp4",
+        "video_offset_ms": 0.0,
+        "exact": False,
+        "source_image_url": "/data/frames/legacyvideo_20260101000000000000.jpg",
+    }
+    assert late_position.status_code == 200
+    assert late_position.json()["video_offset_ms"] == 4000.0
+    assert stale_position.status_code == 200
+    assert stale_position.json()["exact"] is False
+    assert stale_position.json()["video_url"] == "/data/videos/legacyvideo.mp4"
+    assert stale_position.json()["video_offset_ms"] == 2000.0
+    assert upload_position.status_code == 404
+    assert missing_position.status_code == 404
+
+
 def test_video_upload_queue_full_returns_503_with_exact_partial_progress(
     monkeypatch, tmp_path
 ):

@@ -109,7 +109,9 @@ Next, follow [upload, process and inspect](docs/first-run.md#upload-process-and-
 The existing deployment assets use a source build managed by systemd, with PostgreSQL and
 optionally Milvus managed by Docker Compose. An isolated container deployment is also available
 in [`deploy/containers/README.md`](deploy/containers/README.md), including a multi-stage application
-Dockerfile, private infrastructure, and an opt-in GPU ReID service.
+Dockerfile, private infrastructure, and an opt-in GPU ReID service. Fresh machines can use its
+one-command entry point — `bash deploy/containers/install.sh` (preflight checks, mirror defaults
+for restricted networks, offline bundles via `scripts/make_offline_bundle.sh`).
 
 See the deployment guide in [English](docs/deployment.md) or
 [简体中文](docs/deployment.zh-CN.md) for:
@@ -305,6 +307,7 @@ npm --prefix frontend run check:api
 app/                   FastAPI routes, services, models, schemas, and settings
 frontend/              Vue 3 console
 tests/                 Backend tests
+deploy/containers/     One-command container deployment (install.sh, deploy.sh, manage.sh)
 deploy/milvus/         Local Milvus Compose stack
 deploy/systemd/        Linux service templates
 deploy/agx/            Optional Jetson/AGX and model-service helpers

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 
 import { images as imagesApi, streams as streamsApi, videos as videosApi } from "@/api/client";
-import type { VideoStream } from "@/api/types";
+import type { ImageRead, PersonCropRead, VideoStream } from "@/api/types";
 import CountingLineCanvas, {
   type LinePoint,
   lineToPoints,
@@ -11,8 +11,10 @@ import CountingLineCanvas, {
 import EmptyState from "@/components/EmptyState.vue";
 import FileField from "@/components/FileField.vue";
 import StreamItem from "@/components/StreamItem.vue";
+import VideoPlayerModal from "@/components/VideoPlayerModal.vue";
 import { useSummary } from "@/composables/useSummary";
 import { useToast } from "@/composables/useToast";
+import { useVideoPlayer } from "@/composables/useVideoPlayer";
 import { fmtClock, fmtTime, shortId } from "@/utils/format";
 
 const AUTO_REFRESH_MS = 5000;
@@ -41,6 +43,31 @@ const refreshing = ref(false);
 const autoRefresh = ref(false);
 const processing = ref(false);
 const mediaView = ref<"crops" | "frames">("crops");
+
+const { activeVideo, openVideoAt, closeVideo } = useVideoPlayer();
+
+function reportLocateFailure(error: unknown) {
+  showError(error instanceof Error && error.message
+    ? new Error(`无法定位视频：${error.message}`)
+    : new Error("无法定位源视频"));
+}
+
+function locateVideoFromCrop(crop: PersonCropRead) {
+  if (!crop.image_id) return;
+  openVideoAt({
+    imageId: crop.image_id,
+    caption: `裁剪 ${shortId(crop.id)} · ${fmtTime(crop.captured_at || crop.created_at) || "时间未知"}`,
+  }).catch(reportLocateFailure);
+}
+
+function locateVideoFromImage(image: ImageRead) {
+  openVideoAt({
+    imageId: image.id,
+    videoUrl: image.video_url,
+    videoOffsetMs: image.video_offset_ms,
+    caption: `${image.thumbnail_url ? "识别框" : "原帧"} ${shortId(image.id)} · ${fmtTime(image.captured_at || image.created_at) || "时间未知"}`,
+  }).catch(reportLocateFailure);
+}
 
 const liveStreamId = ref<string>("");
 const livePlaying = ref(false);
@@ -545,6 +572,15 @@ onBeforeUnmount(() => {
           rel="noreferrer"
         >
           <img :src="crop.crop_url" alt="裁剪" loading="lazy" />
+          <button
+            v-if="crop.image_id"
+            class="media-locate"
+            type="button"
+            title="在源视频中定位此画面"
+            @click.prevent.stop="locateVideoFromCrop(crop)"
+          >
+            ▶ 定位视频
+          </button>
           <div class="media-meta">
             <strong>裁剪 {{ shortId(crop.id) }}</strong>
             <span>图片 {{ shortId(crop.image_id) }}</span>
@@ -573,6 +609,16 @@ onBeforeUnmount(() => {
           rel="noreferrer"
         >
           <img :src="image.thumbnail_url || image.image_url" :alt="image.thumbnail_url ? '识别框' : '原帧'" loading="lazy" />
+          <!-- Stream frames have no source video file, so only upload frames get the button. -->
+          <button
+            v-if="image.source_type === 'video_frame'"
+            class="media-locate"
+            type="button"
+            title="在源视频中定位此画面"
+            @click.prevent.stop="locateVideoFromImage(image)"
+          >
+            ▶ 定位视频
+          </button>
           <div class="media-meta">
             <strong>{{ image.thumbnail_url ? "识别框" : "原帧" }} {{ shortId(image.id) }}</strong>
             <span>图片 {{ shortId(image.id) }}</span>
@@ -751,5 +797,7 @@ onBeforeUnmount(() => {
         </form>
       </details>
     </section>
+
+    <VideoPlayerModal v-if="activeVideo" :video="activeVideo" @close="closeVideo" />
   </main>
 </template>

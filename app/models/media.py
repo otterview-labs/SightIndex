@@ -20,6 +20,10 @@ class Image(Base):
     location_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Populated only for video frames: the source video file and the millisecond offset of
+    # this frame inside it, so a viewer can seek straight to the moment the frame shows.
+    video_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    video_offset_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -92,6 +96,9 @@ class PersonObservationIndex(Base):
     location_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     image_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Denormalized from Image so search/observation rows can offer video playback without a join.
+    source_video_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    video_offset_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     crop_url: Mapped[str | None] = mapped_column(String, nullable=True)
     thumbnail_url: Mapped[str | None] = mapped_column(String, nullable=True)
     bbox: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)

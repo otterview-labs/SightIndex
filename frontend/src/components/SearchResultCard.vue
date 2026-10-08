@@ -10,6 +10,10 @@ const props = defineProps<{
   semantic?: boolean;
 }>();
 
+const emit = defineEmits<{
+  (e: "locate-video", item: SearchResultItem & { duplicate_crop_ids?: string[] }): void;
+}>();
+
 const imageUrl = computed(() => props.item.crop_url || props.item.image_url || "");
 
 const title = computed(() =>
@@ -45,6 +49,15 @@ const hasRerankScore = computed(
     <a class="question-card-cover" :href="imageUrl" target="_blank" rel="noreferrer">
       <img :src="imageUrl" alt="检索结果" loading="lazy" decoding="async" />
       <span v-if="hasScore" class="score-badge">{{ semantic ? "相似度" : "score" }} {{ semantic ? item.score.toFixed(3) : formatScore(item.score) }}</span>
+      <button
+        v-if="item.image_id"
+        class="card-locate-video"
+        type="button"
+        title="在源视频中定位此画面"
+        @click.prevent="emit('locate-video', item)"
+      >
+        ▶ 定位视频
+      </button>
     </a>
     <div class="question-card-body">
       <strong>{{ title }}</strong>
@@ -74,3 +87,32 @@ const hasRerankScore = computed(
     </div>
   </article>
 </template>
+
+<style scoped>
+/* Inside the cover link overlaying the image; the click is stopped so the link
+   navigation does not fire. */
+.card-locate-video {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.card-locate-video:hover,
+.card-locate-video:focus-visible {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.card-locate-video:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+</style>

@@ -6,8 +6,10 @@ import { face as faceApi, persons as personsApi, search as searchApi } from "@/a
 import type { FaceDiagnosticItem, ObservationIndexItem } from "@/api/types";
 import FaceBoxThumb from "@/components/FaceBoxThumb.vue";
 import PersonSelect from "@/components/PersonSelect.vue";
+import VideoPlayerModal from "@/components/VideoPlayerModal.vue";
 import { usePersons } from "@/composables/usePersons";
 import { useToast } from "@/composables/useToast";
+import { useVideoPlayer } from "@/composables/useVideoPlayer";
 import { fmtTime, formatScore, shortId, shortText } from "@/utils/format";
 
 const LABEL_KEYS = [
@@ -37,6 +39,21 @@ const VERDICT_TEXT: Record<string, string> = {
 
 const { showError, toast } = useToast();
 const { persons, activePersonId, activePersonName, refresh: refreshPersons } = usePersons();
+const { activeVideo, openVideoAt, closeVideo } = useVideoPlayer();
+
+function locateVideo(item: ObservationIndexItem) {
+  if (!item.image_id) return;
+  openVideoAt({
+    imageId: item.image_id,
+    videoUrl: item.source_video_url,
+    videoOffsetMs: item.video_offset_ms,
+    caption: `${item.person_name || "未知人员"} · ${fmtTime(item.captured_at) || "时间未知"}`,
+  }).catch((error) => {
+    showError(error instanceof Error && error.message
+      ? new Error(`无法定位视频：${error.message}`)
+      : new Error("无法定位源视频"));
+  });
+}
 
 const items = ref<ObservationIndexItem[]>([]);
 const diagnostics = ref(new Map<string, FaceDiagnosticItem>());
@@ -612,6 +629,15 @@ onMounted(async () => {
                     找相似
                   </RouterLink>
                   <button
+                    v-if="item.image_id"
+                    class="mini-button"
+                    type="button"
+                    title="在源视频中定位此画面"
+                    @click="locateVideo(item)"
+                  >
+                    定位视频
+                  </button>
+                  <button
                     v-if="item.crop_id && !item.person_id"
                     class="mini-button"
                     type="button"
@@ -645,5 +671,7 @@ onMounted(async () => {
         </button>
       </div>
     </section>
+
+    <VideoPlayerModal v-if="activeVideo" :video="activeVideo" @close="closeVideo" />
   </main>
 </template>
