@@ -20,12 +20,16 @@
 #   reid      + reid service (requires REID_ENABLED=true in the env file)
 #   embedding + Qwen3-VL embedding service and API visual-embedding wiring
 #              (requires the QWEN_* keys in the env file)
-#   semantic  + semantic-search API settings overlay
+#   embedding-external
+#              + API visual-embedding wiring against an existing service
+#              (requires EXTERNAL_EMBEDDING_URL in the env file)
+#   semantic  + semantic-search API settings overlay (auto-index on ingest)
 #
 # Defaults resolve for /data/sightindex-bj-test; override with SIGHTINDEX_ROOT
 # or the flags. Overlay compose files (compose.embedding.yaml,
-# compose.semantic-search.yaml) are searched across all releases newest-first,
-# so split releases keep working. Release names must not contain spaces.
+# compose.embedding-external.yaml, compose.semantic-search.yaml) are searched
+# across all releases newest-first, so split releases keep working. Release
+# names must not contain spaces.
 
 set -euo pipefail
 
@@ -156,6 +160,16 @@ for stack in ${STACKS[@]+"${STACKS[@]}"}; do
       overlay="$(find_overlay compose.semantic-search.yaml)" || {
         echo "compose.semantic-search.yaml not found in any release" >&2; exit 1;
       }
+      COMPOSE_FILES+=(-f "$overlay") ;;
+    embedding-external)
+      overlay="$(find_overlay compose.embedding-external.yaml)" || {
+        echo "compose.embedding-external.yaml not found in any release" >&2; exit 1;
+      }
+      if [ -z "$(env_value EXTERNAL_EMBEDDING_URL)" ]; then
+        echo "EXTERNAL_EMBEDDING_URL missing in $ENV_FILE; the embedding-external stack" >&2
+        echo "points the API at an existing service implementing /api/embeddings/visual" >&2
+        exit 1
+      fi
       COMPOSE_FILES+=(-f "$overlay") ;;
   esac
 done

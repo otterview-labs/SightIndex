@@ -1,0 +1,19 @@
+# Point the API at an existing embedding service instead of running the
+# bundled Qwen3-VL container locally. The endpoint must implement the
+# SightIndex contract: POST {EXTERNAL_EMBEDDING_URL}/api/embeddings/visual
+# accepting {"text","instruction"} or {"image_base64","image_filename"},
+# authenticated via Authorization: Bearer / X-API-Key when a key is set.
+#
+# Enable with: manage.sh up base [reid] embedding-external semantic
+services:
+  api:
+    environment:
+      VISUAL_EMBEDDING_PROVIDER: qwen3_vl_http
+      VISUAL_EMBEDDING_MODEL: ${EXTERNAL_EMBEDDING_MODEL:-Qwen/Qwen3-VL-Embedding-2B}
+      VISUAL_EMBEDDING_DIM: ${EXTERNAL_EMBEDDING_DIM:-2048}
+      VISUAL_EMBEDDING_SERVICE_URL: ${EXTERNAL_EMBEDDING_URL:?set EXTERNAL_EMBEDDING_URL}
+      VISUAL_EMBEDDING_UPSTREAM_API_KEY: ${EXTERNAL_EMBEDDING_API_KEY:-}
+      VISUAL_EMBEDDING_SERVICE_TIMEOUT_SECONDS: "60"
+      VISUAL_EMBEDDING_MAX_CONCURRENCY: "1"
+      VISUAL_EMBEDDING_QUEUE_TIMEOUT_SECONDS: "5"
+      MILVUS_VISUAL_COLLECTION_PREFIX: ${QWEN_VISUAL_COLLECTION_PREFIX:-sightindex_qwen3vl2b_768p_v1}
