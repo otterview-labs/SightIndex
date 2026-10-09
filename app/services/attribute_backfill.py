@@ -3,7 +3,12 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
 from pathlib import Path
 from typing import Literal
 

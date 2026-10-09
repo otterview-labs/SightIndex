@@ -1,5 +1,10 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
 from typing import Any
 
 from pydantic import BaseModel, Field, computed_field

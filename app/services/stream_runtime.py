@@ -4,7 +4,12 @@ import threading
 import time
 import uuid
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
 from pathlib import Path
 
 from sqlalchemy.orm import Session

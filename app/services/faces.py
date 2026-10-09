@@ -7,7 +7,12 @@ import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
 from pathlib import Path
 from time import monotonic
 from typing import Any

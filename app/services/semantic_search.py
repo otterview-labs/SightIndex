@@ -1,7 +1,11 @@
 import hashlib
 import math
 import uuid
-from datetime import UTC
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone
+    UTC = timezone.utc
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session

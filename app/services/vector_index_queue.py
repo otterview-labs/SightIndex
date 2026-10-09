@@ -8,7 +8,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from types import TracebackType
-from typing import Self
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
