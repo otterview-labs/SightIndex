@@ -113,7 +113,10 @@ class SemanticSearchService:
             if crop_path.stat().st_size > 20 * 1024 * 1024:
                 return None
             with crop_path.open("rb") as source:
-                return hashlib.file_digest(source, "sha256").hexdigest()
+                hasher = hashlib.sha256()
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+                return hasher.hexdigest()
         except OSError:
             return None
 
