@@ -723,3 +723,137 @@ HTTP 200 only proves the page is reachable. Also confirm:
 
 The adopted scope, rejected suggestions, and residual risks of this review round are recorded in
 `docs/reid-fable5-review-20260905.md`.
+
+## Troubleshooting a source deployment (2026-10)
+
+The Beijing test host once lost text-to-image and image-to-image search after a feature update.
+Three independent causes were stacked on top of each other; checking them in this order is the
+fastest way to localise the failure.
+
+### Never use Python 3.11-only stdlib APIs on a 3.10 runtime
+
+The prerequisites above ask for Python 3.11+, but the Beijing host runs 3.10.12. APIs added in
+3.11 fail outright on 3.10, and call-site usage only shows up when a request hits it:
+
+| Usage | Added in | Symptom |
+| --- | --- | --- |
+| `hashlib.file_digest()` | 3.11 | semantic search returns HTTP 500 with `AttributeError: module 'hashlib' has no attribute 'file_digest'` |
+| `datetime.UTC` | 3.11 | module import fails with `ImportError` |
+| `typing.Self` | 3.11 | module import fails with `ImportError` |
+
+The import-time cases can fall back with `try/except ImportError` (the repository does this).
+Call-site cases need a rewritten implementation, for example a chunked `hashlib.sha256()` instead
+of `hashlib.file_digest()`. Before deploying onto 3.10, scan for them:
+
+```bash
+grep -rnE "hashlib\.file_digest|itertools\.batched|typing\.override|import tomllib" app/
+```
+
+### The visual embedding model path must not be a HuggingFace repo id
+
+`VISUAL_EMBEDDING_MODEL` means two different things depending on the process:
+
+- in the API process (`VISUAL_EMBEDDING_PROVIDER=qwen3_vl_http`) it is only a label, compared
+  against `vl_embeddings.embedding_model` in `app/services/semantic_search.py` to decide whether
+  semantic search is configured;
+- in the embedding service (`VISUAL_EMBEDDING_PROVIDER=qwen3_vl`) it is the `model_name_or_path`
+  used to load the model.
+
+So on a host with no internet access and no HuggingFace cache, setting it to
+`Qwen/Qwen3-VL-Embedding-2B` fails with:
+
+```text
+We couldn't connect to 'https://huggingface.co' to load the files,
+and couldn't find them in the cached files.
+```
+
+The embedding endpoint then returns 503 and the whole semantic search path is unavailable.
+
+Do not "fix" this by pointing the global `VISUAL_EMBEDDING_MODEL` at a model directory: the API
+process compares that value with stored embeddings, so a filesystem path makes every existing
+vector mismatch, flips `configured` to false, and makes semantic search refuse to serve. Override
+it for the embedding service only — `deploy/agx/start_embedding_service.sh` already does:
+
+```bash
+EMBEDDING_SERVICE_MODEL="${EMBEDDING_SERVICE_MODEL:-${QWEN3_VL_EMBEDDING_MODEL_PATH:-/data/models/Qwen3-VL-Embedding-2B}}"
+export VISUAL_EMBEDDING_MODEL="$EMBEDDING_SERVICE_MODEL"
+```
+
+Keep these in `.env`, and make sure the model directory contains `scripts/qwen3_vl_embedding.py`:
+
+```dotenv
+QWEN3_VL_EMBEDDING_REPO_DIR=/data/models/Qwen3-VL-Embedding-2B
+QWEN3_VL_EMBEDDING_MODEL_PATH=/data/models/Qwen3-VL-Embedding-2B
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+```
+
+Commenting the last two out is not the root cause, but it makes the process retry the network and
+stretch out every failure.
+
+### The Milvus user.yaml mount must be a file, never a directory
+
+A common compose snippet:
+
+```yaml
+volumes:
+  - /data/bkai/db/milvus_conf/user.yaml:/milvus/configs/user.yaml
+```
+
+If that host path was accidentally created as a directory, Milvus logs `init baseTable with file
+failed ... /milvus/configs/user.yaml: is a directory`, drops its whole file config source, lets
+every component fall back to the same port, has RootCoord claim `19530`, then panics from
+DataCoord with `bind: address already in use` and restarts forever with exit 134 (1772 restarts
+observed on the Beijing host).
+
+```bash
+docker inspect milvus_standalone --format '{{.RestartCount}} {{.State.ExitCode}}'
+docker logs milvus_standalone 2>&1 | grep -E "listen on|bind: address|panic"
+```
+
+A healthy start gives each component its own listener:
+
+```text
+RootCoord  listen on [::]:53100
+DataCoord  listen on [::]:13333
+QueryCoord listen on [::]:19531
+Proxy      listen on ...:19530
+```
+
+Either replace the path with a real config file (explicit ports are a good idea) or point compose
+at an ordinary file. When the directory is root-owned and the deployment account cannot rename it,
+changing the mount source is the least invasive fix:
+
+```yaml
+  - /data/bkai/db/milvus_user.yaml:/milvus/configs/user.yaml
+```
+
+```yaml
+rootCoord:
+  port: 53100
+dataCoord:
+  port: 13333
+queryCoord:
+  port: 19531
+proxy:
+  port: 19530
+```
+
+### Port consistency
+
+`deploy/agx/start.sh` defaults `APP_PORT` to `8000`, which may not be the port the deployment
+actually listens on. Because the script sources `.env`, putting the port there is what makes the
+script reproduce the running environment and keeps `PUBLIC_BASE_URL` honest:
+
+```dotenv
+APP_PORT=2059
+PUBLIC_BASE_URL=http://127.0.0.1:2059
+```
+
+### Frontend bundle and Node version
+
+When `frontend/dist/index.html` is missing, `/` returns 503 with build instructions while
+`/health`, `/docs` and `/api/*` all answer normally — easy to misread as "the service is down".
+Building needs Node 20+. When `start.sh` runs from a script or a non-interactive ssh command,
+nvm from `~/.bashrc` is not loaded; the script now fails loudly on an old Node instead of
+producing a broken bundle, and `FRONTEND_BUILD=skip` reuses an existing build.

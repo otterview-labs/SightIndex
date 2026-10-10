@@ -21,8 +21,25 @@ REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-requirements.agx.txt}"
 # The console is a Vue SPA built here rather than committed, so the app has a bundle to serve.
 # Set FRONTEND_BUILD=skip to reuse an existing frontend/dist and avoid the npm round trip.
 if [ "${FRONTEND_BUILD:-auto}" != "skip" ]; then
+  # nvm is normally wired into ~/.bashrc, which only interactive shells read. A script, cron
+  # job or non-interactive ssh command therefore sees the distro node, which is often far too
+  # old for the Vite toolchain; prefer the newest nvm runtime before giving up.
+  node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  if [ "${node_major:-0}" -lt 20 ] && [ -d "${NVM_DIR:-$HOME/.nvm}/versions/node" ]; then
+    nvm_node="$(ls -1 "${NVM_DIR:-$HOME/.nvm}/versions/node" 2>/dev/null | sort -V | tail -1)"
+    if [ -n "$nvm_node" ] && [ -x "${NVM_DIR:-$HOME/.nvm}/versions/node/$nvm_node/bin/npm" ]; then
+      export PATH="${NVM_DIR:-$HOME/.nvm}/versions/node/$nvm_node/bin:$PATH"
+      node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+      echo "start.sh: using nvm node $nvm_node for the frontend build" >&2
+    fi
+  fi
   if ! command -v npm > /dev/null 2>&1; then
     echo "npm not found; install Node.js or set FRONTEND_BUILD=skip with a prebuilt frontend/dist" >&2
+    exit 1
+  fi
+  if [ "${node_major:-0}" -lt 20 ]; then
+    echo "Node.js ${node_major}.x is too old for the frontend toolchain (need 20+)." >&2
+    echo "Install a newer Node.js and put it on PATH, or set FRONTEND_BUILD=skip with a prebuilt frontend/dist." >&2
     exit 1
   fi
   ( cd frontend && npm ci && npm run build ) > logs/frontend_build.log 2>&1

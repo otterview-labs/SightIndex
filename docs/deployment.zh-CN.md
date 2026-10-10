@@ -660,3 +660,129 @@ HTTP 200 只证明入口可达,还需确认:
 - 空人脸证据不显示成"不一致";不足 2 个高置信标签时显示中性,不伪造 100% 一致。
 
 本轮 Fable5 审核的采纳范围、未采纳建议与遗留风险见 `docs/reid-fable5-review-20260905.md`。
+
+## 2026-10 源码部署故障排查
+
+北京测试机出现过一次"文搜图和图搜图原本可用、更新后不可用"的故障。三个独立原因叠加在一起，
+按下面的顺序排查定位最快。
+
+### Python 3.10 上不要使用 3.11 才有的标准库 API
+
+本文前置条件写的是 Python 3.11 或更高版本，但北京机器实际运行在 3.10.12。3.11 新增的标准库
+API 在 3.10 上会直接失败，且往往拖到具体请求才暴露：
+
+| 用法 | 引入版本 | 症状 |
+| --- | --- | --- |
+| `hashlib.file_digest()` | 3.11 | 语义检索 HTTP 500，日志为 `AttributeError: module 'hashlib' has no attribute 'file_digest'` |
+| `datetime.UTC` | 3.11 | 模块导入即失败（`ImportError`） |
+| `typing.Self` | 3.11 | 模块导入即失败（`ImportError`） |
+
+导入期的两处可以用 `try/except ImportError` 回退（仓库已有）；函数调用类的只能改写实现，例如用
+分块 `hashlib.sha256()` 取代 `hashlib.file_digest()`。部署到 3.10 前先扫一遍：
+
+```bash
+grep -rnE "hashlib\.file_digest|itertools\.batched|typing\.override|import tomllib" app/
+```
+
+### 视觉嵌入服务的模型路径不能填 HuggingFace 仓库名
+
+`VISUAL_EMBEDDING_MODEL` 在两类进程里含义不同：
+
+- API 进程（`VISUAL_EMBEDDING_PROVIDER=qwen3_vl_http`）只把它当标签，用于和
+  `vl_embeddings.embedding_model` 比对（`app/services/semantic_search.py`），判断语义检索
+  是否已配置；
+- 嵌入服务进程（`VISUAL_EMBEDDING_PROVIDER=qwen3_vl`）把它当 `model_name_or_path` 去加载模型。
+
+因此当嵌入服务运行在一台没有外网、也没有 HuggingFace 缓存的主机上时，写成
+`Qwen/Qwen3-VL-Embedding-2B` 会报：
+
+```text
+We couldn't connect to 'https://huggingface.co' to load the files,
+and couldn't find them in the cached files.
+```
+
+表现为嵌入接口 503，语义文搜图整条链路不可用。
+
+不要因此把 `.env` 里的 `VISUAL_EMBEDDING_MODEL` 全局改成模型目录路径：API 进程会用该值比对
+已入库的 `vl_embeddings.embedding_model`，一旦变成路径，已有向量全部对不上，`configured`
+会变成 false，语义检索直接拒绝服务。正确做法是只给嵌入服务进程覆盖，
+`deploy/agx/start_embedding_service.sh` 已经这样处理：
+
+```bash
+EMBEDDING_SERVICE_MODEL="${EMBEDDING_SERVICE_MODEL:-${QWEN3_VL_EMBEDDING_MODEL_PATH:-/data/models/Qwen3-VL-Embedding-2B}}"
+export VISUAL_EMBEDDING_MODEL="$EMBEDDING_SERVICE_MODEL"
+```
+
+`.env` 中保留以下配置，并确认模型目录里存在 `scripts/qwen3_vl_embedding.py`：
+
+```dotenv
+QWEN3_VL_EMBEDDING_REPO_DIR=/data/models/Qwen3-VL-Embedding-2B
+QWEN3_VL_EMBEDDING_MODEL_PATH=/data/models/Qwen3-VL-Embedding-2B
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+```
+
+后两项被注释掉不是故障根因，但会让进程反复尝试访问外网、拉长失败时间。
+
+### Milvus 的 user.yaml 挂载必须是文件，不能是目录
+
+compose 中常见写法：
+
+```yaml
+volumes:
+  - /data/bkai/db/milvus_conf/user.yaml:/milvus/configs/user.yaml
+```
+
+若主机上该路径被误建成目录，Milvus 会依次出现：`init baseTable with file failed ...
+/milvus/configs/user.yaml: is a directory`；整个文件配置源加载失败、各组件回退到相同端口；
+RootCoord 先占用 `19530`，DataCoord 随后 `bind: address already in use` 触发 panic；容器以
+exit 134 无限重启（实测 `RestartCount` 达到 1772）。
+
+```bash
+docker inspect milvus_standalone --format '{{.RestartCount}} {{.State.ExitCode}}'
+docker logs milvus_standalone 2>&1 | grep -E "listen on|bind: address|panic"
+```
+
+正常启动时各组件端口互不相同，可作为判据：
+
+```text
+RootCoord  listen on [::]:53100
+DataCoord  listen on [::]:13333
+QueryCoord listen on [::]:19531
+Proxy      listen on ...:19530
+```
+
+修复方式二选一：把该路径换成真正的配置文件（可显式写明各组件端口），或改 compose 指向普通
+文件。若该目录由 root 创建、部署账号无权重命名，直接改挂载源更省事：
+
+```yaml
+  - /data/bkai/db/milvus_user.yaml:/milvus/configs/user.yaml
+```
+
+```yaml
+rootCoord:
+  port: 53100
+dataCoord:
+  port: 13333
+queryCoord:
+  port: 19531
+proxy:
+  port: 19530
+```
+
+### 端口一致性
+
+`deploy/agx/start.sh` 的 `APP_PORT` 默认 `8000`，而实际部署监听的端口可能不同。该脚本会
+`source .env`，把端口写进 `.env` 才能让脚本复现当前环境，并让 `PUBLIC_BASE_URL` 与实际端口一致：
+
+```dotenv
+APP_PORT=2059
+PUBLIC_BASE_URL=http://127.0.0.1:2059
+```
+
+### 前端构建产物与 Node 版本
+
+`frontend/dist/index.html` 缺失时，`/` 返回 503 并附带构建提示，而 `/health`、`/docs`、
+`/api/*` 全部正常，容易被误判为"服务挂了"。构建需要 Node 20+；通过脚本或非交互式 SSH 执行
+`start.sh` 时 `~/.bashrc` 中的 nvm 不会生效，脚本会在 node 版本过低时明确报错，也可以设置
+`FRONTEND_BUILD=skip` 复用已有产物。
