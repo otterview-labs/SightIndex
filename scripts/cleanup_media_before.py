@@ -18,8 +18,24 @@ from app.config.settings import get_settings
 from app.db.session import SessionLocal, engine
 from app.models import persons  # noqa: F401
 from app.models.events import CountingEvent, RecognitionEvent
-from app.models.media import Image, PersonCrop
-from app.models.vectors import FaceEmbedding, VLEmbedding
+from app.models.media import Image, PersonCrop, PersonObservationIndex
+from app.models.reid import ReidMatchFeedback
+from app.models.vectors import CropFaceExtraction, FaceEmbedding, VectorIndexJob, VLEmbedding
+
+# Tables that must be cleared before person_crops or images. reid_match_feedback declares
+# ON DELETE CASCADE; every other reference is NO ACTION and rejects the parent delete outright.
+# Which of them carry a constraint varies by how the database was created, so all of them are
+# cleared unconditionally. Keep this list in step with the schema.
+CHILD_TABLES_BEFORE_CROPS = (
+    "reid_match_feedback",
+    "person_observation_index",
+    "crop_face_extractions",
+    "vector_index_jobs",
+    "counting_events",
+    "recognition_events",
+    "face_embeddings",
+    "vl_embeddings",
+)
 
 
 def main() -> None:
@@ -127,6 +143,50 @@ def main() -> None:
         )
         vl_embedding_ids = {embedding.id for embedding in vl_embeddings}
 
+        observation_rows = list(
+            db.scalars(
+                select(PersonObservationIndex).where(
+                    or_(
+                        PersonObservationIndex.crop_id.in_(crop_ids),
+                        PersonObservationIndex.image_id.in_(image_ids),
+                    )
+                )
+            )
+        )
+        observation_ids = {row.id for row in observation_rows}
+
+        # This table is keyed by crop_id; it has no id column of its own.
+        face_cache_crop_ids = {
+            crop_id
+            for crop_id in db.scalars(
+                select(CropFaceExtraction.crop_id).where(
+                    CropFaceExtraction.crop_id.in_(crop_ids)
+                )
+            )
+        }
+
+        feedback_rows = list(
+            db.scalars(
+                select(ReidMatchFeedback).where(
+                    or_(
+                        ReidMatchFeedback.query_crop_id.in_(crop_ids),
+                        ReidMatchFeedback.candidate_crop_id.in_(crop_ids),
+                    )
+                )
+            )
+        )
+        feedback_ids = {row.id for row in feedback_rows}
+
+        # Durable queue rows: leaving them behind lets the worker retry object_ids that no
+        # longer exist, and re-create vectors for deleted crops.
+        referenced_object_ids = image_ids | crop_ids
+        index_job_rows = list(
+            db.scalars(
+                select(VectorIndexJob).where(VectorIndexJob.object_id.in_(referenced_object_ids))
+            )
+        )
+        index_job_ids = {job.id for job in index_job_rows}
+
         referenced_image_ids = {
             value
             for value in db.scalars(
@@ -151,6 +211,10 @@ def main() -> None:
             "delete_recognition_events": len(recognition_events),
             "delete_face_embeddings": len(face_embeddings),
             "delete_vl_embeddings": len(vl_embeddings),
+            "delete_person_observation_index": len(observation_rows),
+            "delete_crop_face_extractions": len(face_cache_crop_ids),
+            "delete_reid_match_feedback": len(feedback_rows),
+            "delete_vector_index_jobs": len(index_job_rows),
         }
         print(plan)
         if not args.execute:
@@ -164,6 +228,10 @@ def main() -> None:
             recognition_ids=recognition_ids,
             face_embedding_ids=face_embedding_ids,
             vl_embedding_ids=vl_embedding_ids,
+            observation_ids=observation_ids,
+            face_cache_crop_ids=face_cache_crop_ids,
+            feedback_ids=feedback_ids,
+            index_job_ids=index_job_ids,
         )
         delete_rows(
             image_ids=image_ids_to_delete,
@@ -172,20 +240,35 @@ def main() -> None:
             recognition_ids=recognition_ids,
             face_embedding_ids=face_embedding_ids,
             vl_embedding_ids=vl_embedding_ids,
+            observation_ids=observation_ids,
+            face_cache_crop_ids=face_cache_crop_ids,
+            feedback_ids=feedback_ids,
+            index_job_ids=index_job_ids,
         )
         removed_files = remove_files(settings.data_dir, file_rows)
         delete_milvus_entries("image", [str(value) for value in image_ids_to_delete])
         delete_milvus_entries("person_crop", [str(value) for value in crop_ids])
+        # ReID keeps its own collection: a different model and dimension from the VL vectors.
+        delete_milvus_entries("reid_person_crop", [str(value) for value in crop_ids])
         print(
             {
                 "removed_files": removed_files,
                 "remaining_images": db.scalar(select(text("count(*)")).select_from(Image)),
                 "remaining_crops": db.scalar(select(text("count(*)")).select_from(PersonCrop)),
+                "remaining_observations": db.scalar(
+                    select(text("count(*)")).select_from(PersonObservationIndex)
+                ),
+                "remaining_crop_face_extractions": db.scalar(
+                    select(text("count(*)")).select_from(CropFaceExtraction)
+                ),
                 "remaining_counting_events": db.scalar(
                     select(text("count(*)")).select_from(CountingEvent)
                 ),
                 "remaining_recognition_events": db.scalar(
                     select(text("count(*)")).select_from(RecognitionEvent)
+                ),
+                "remaining_vector_index_jobs": db.scalar(
+                    select(text("count(*)")).select_from(VectorIndexJob)
                 ),
             }
         )
@@ -222,16 +305,13 @@ def backup_tables(
     recognition_ids: set[object],
     face_embedding_ids: set[object],
     vl_embedding_ids: set[object],
+    observation_ids: set[object],
+    face_cache_crop_ids: set[object],
+    feedback_ids: set[object],
+    index_job_ids: set[object],
 ) -> None:
     with engine.begin() as conn:
-        for table in (
-            "images",
-            "person_crops",
-            "counting_events",
-            "recognition_events",
-            "face_embeddings",
-            "vl_embeddings",
-        ):
+        for table in ("images", "person_crops", *CHILD_TABLES_BEFORE_CROPS):
             conn.execute(text(f"DROP TABLE IF EXISTS {backup_stamp}_{table}"))
             conn.execute(
                 text(f"CREATE TABLE {backup_stamp}_{table} AS SELECT * FROM {table} WHERE false")
@@ -242,13 +322,25 @@ def backup_tables(
         insert_backup(conn, backup_stamp, "recognition_events", recognition_ids)
         insert_backup(conn, backup_stamp, "face_embeddings", face_embedding_ids)
         insert_backup(conn, backup_stamp, "vl_embeddings", vl_embedding_ids)
+        insert_backup(conn, backup_stamp, "person_observation_index", observation_ids)
+        insert_backup(
+            conn, backup_stamp, "crop_face_extractions", face_cache_crop_ids, key="crop_id"
+        )
+        insert_backup(conn, backup_stamp, "reid_match_feedback", feedback_ids)
+        insert_backup(conn, backup_stamp, "vector_index_jobs", index_job_ids)
 
 
-def insert_backup(conn: object, backup_stamp: str, table: str, ids: set[object]) -> None:
+def insert_backup(
+    conn: object,
+    backup_stamp: str,
+    table: str,
+    ids: set[object],
+    key: str = "id",
+) -> None:
     if not ids:
         return
     conn.execute(
-        text(f"INSERT INTO {backup_stamp}_{table} SELECT * FROM {table} WHERE id = ANY(:ids)"),
+        text(f"INSERT INTO {backup_stamp}_{table} SELECT * FROM {table} WHERE {key} = ANY(:ids)"),
         {"ids": list(ids)},
     )
 
@@ -261,6 +353,10 @@ def delete_rows(
     recognition_ids: set[object],
     face_embedding_ids: set[object],
     vl_embedding_ids: set[object],
+    observation_ids: set[object],
+    face_cache_crop_ids: set[object],
+    feedback_ids: set[object],
+    index_job_ids: set[object],
 ) -> None:
     with engine.begin() as conn:
         if image_ids:
@@ -270,6 +366,22 @@ def delete_rows(
                     "WHERE last_frame_image_id = ANY(:ids)"
                 ),
                 {"ids": list(image_ids)},
+            )
+        # Order matters here. PostgreSQL checks a NO ACTION reference when the statement ends.
+        # The deployed schema (milvus_log.test) carries such references from
+        # person_observation_index and recognition_events onto person_crops and images, so those
+        # rows have to go first or the person_crops delete is rejected. crop_face_extractions,
+        # counting_events and face_embeddings only carry the constraint in databases created
+        # from a newer model set; clearing them unconditionally keeps this order valid either
+        # way. reid_match_feedback would cascade, but deleting it explicitly preserves the audit
+        # trail in the backup tables instead of losing it to the cascade.
+        delete_by_ids(conn, "reid_match_feedback", feedback_ids)
+        delete_by_ids(conn, "person_observation_index", observation_ids)
+        delete_by_ids(conn, "vector_index_jobs", index_job_ids)
+        if face_cache_crop_ids:
+            conn.execute(
+                text("DELETE FROM crop_face_extractions WHERE crop_id = ANY(:ids)"),
+                {"ids": list(face_cache_crop_ids)},
             )
         delete_by_ids(conn, "counting_events", counting_ids)
         delete_by_ids(conn, "face_embeddings", face_embedding_ids)

@@ -45,23 +45,33 @@ Milvus 侧有三个集合涉及：
 
 ### 外键
 
-线上库的实际规则：
+应用实际连的是 `milvus_log` 库的 `test` schema（`.env` 里生效的那条 `DATABASE_URL`）。那里的
+规则是：
 
 | 外键 | 引用 | 删除规则 |
 | --- | --- | --- |
 | `reid_match_feedback.query_crop_id` | `person_crops` | CASCADE |
 | `reid_match_feedback.candidate_crop_id` | `person_crops` | CASCADE |
-| `crop_face_extractions.crop_id` | `person_crops` | NO ACTION |
 | `person_observation_index.crop_id` | `person_crops` | NO ACTION |
 | `person_observation_index.image_id` | `images` | NO ACTION |
 | `person_crops.image_id` | `images` | NO ACTION |
-| `recognition_events.crop_id` / `.image_id` | | NO ACTION |
-| `counting_events.crop_id` / `.image_id` | | NO ACTION |
-| `face_embeddings.crop_id` / `.image_id` | | NO ACTION |
+| `recognition_events.crop_id` / `.image_id` | `person_crops` / `images` | NO ACTION |
 | `video_streams.last_frame_image_id` | `images` | NO ACTION |
 
-只有 `reid_match_feedback` 会跟着删。其它都得自己动手，否则删 `person_crops` 会被
-`crop_face_extractions` 或 `person_observation_index` 拦下来。
+只有 `reid_match_feedback` 会跟着删。删 `person_crops` 之前不动 `person_observation_index`，
+就会被它的外键直接拒绝。
+
+注意 `crop_face_extractions`、`counting_events`、`face_embeddings` 在这台机器的这个库里
+**没有外键**。同机的另一个库 `sightindex`（`.env` 里被注释掉的那条）是从同一批模型建的，
+这三张表都有 `NO ACTION` 外键。差异来自建库时机：`create_all` 只建缺失的表，不会给已有表补
+约束，所以老库会缺约束。删除逻辑对这几张表一律显式清理，两种库上都成立。
+
+实测这个库里 `DELETE FROM person_crops` 的报错是：
+
+```
+ERROR: update or delete on table "person_crops" violates foreign key constraint
+       "person_observation_index_crop_id_fkey" on table "person_observation_index"
+```
 
 ### 向量
 
@@ -260,14 +270,15 @@ for url in file_urls:                       # 前面确认过不含 video_url
 
 ### 顺序验证过
 
-2026-10-10 在北京测试库上拿 `BEGIN … ROLLBACK` 把上面的 SQL 跑了一遍，没有产生真实改动。
+2026-10-13 在测试机上拿 `BEGIN … ROLLBACK` 把上面的 SQL 跑了一遍（应用真正使用的
+`milvus_log.test`），没有产生真实改动。
 
 先试错误顺序，直接删 `person_crops`：
 
 ```
 ERROR: update or delete on table "person_crops" violates foreign key constraint
        "person_observation_index_crop_id_fkey" on table "person_observation_index"
-DETAIL: Key (id)=(ed9249a7-…) is still referenced from table "person_observation_index".
+DETAIL: Key (id)=(977b0788-…) is still referenced from table "person_observation_index".
 ```
 
 再按上面第二步的顺序：
@@ -275,23 +286,23 @@ DETAIL: Key (id)=(ed9249a7-…) is still referenced from table "person_observati
 ```
 UPDATE video_streams                        无匹配
 DELETE reid_match_feedback                  0
-DELETE crop_face_extractions                0
 DELETE person_observation_index             2
+DELETE vector_index_jobs                    5
+DELETE crop_face_extractions                0
 DELETE counting_events                      0
-DELETE recognition_events                   0
 DELETE face_embeddings                      0
 DELETE vl_embeddings                        0
-DELETE vector_index_jobs                    5
+DELETE recognition_events                   0
 DELETE person_crops                         2
 DELETE images                               1
 ROLLBACK
 ```
 
-没有外键报错，回滚后 `person_crops`、`images`、`person_observation_index` 的行数都没变。
+没有外键报错，回滚后 `person_crops`、`images` 的行数都没变。
 
-有一件事顺便确认了：这台机器上 PG 的 `vl_embeddings` 表是空的，向量只在 Milvus 里。所以在这种
-部署下，Milvus 那一步才是唯一真正生效的向量清理，`DELETE FROM vl_embeddings` 只是兜底。写验收
-脚本的时候别只看 PG 的行数。
+有一件事顺便确认了：这台机器上 `vl_embeddings` 表是空的，向量只在 Milvus 里。所以在这种部署
+下，Milvus 那一步才是唯一真正生效的向量清理，`DELETE FROM vl_embeddings` 只是兜底。写验收脚本
+的时候别只看 PG 的行数。
 
 ## 失败与一致性
 
