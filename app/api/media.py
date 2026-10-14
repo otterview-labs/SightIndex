@@ -10,6 +10,8 @@ from sqlalchemy import func, select
 from app.api.deps import AppSettings, DBSession
 from app.models.media import Image, PersonCrop
 from app.schemas.media import (
+    ImageDeletionCounts,
+    ImageDeletionResponse,
     ImageRead,
     ImageVideoPosition,
     MediaCounts,
@@ -22,6 +24,7 @@ from app.schemas.media import (
 )
 from app.services.frame_processing import FrameProcessingService
 from app.services.media import MediaService
+from app.services.media_deletion import MediaDeletionService, MediaDeletionUnavailable
 from app.services.statistics import StatisticsService
 from app.services.storage import StorageService
 from app.services.stream_runtime import stream_runtime
@@ -95,6 +98,44 @@ def get_image(
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return image
+
+
+@router.delete("/images/{image_id}", response_model=ImageDeletionResponse)
+def delete_image(
+    image_id: uuid.UUID,
+    db: DBSession,
+    settings: AppSettings,
+    dry_run: bool = Query(default=False),
+    delete_files: bool = Query(default=True),
+    reason: str | None = Query(default=None, max_length=200),
+) -> ImageDeletionResponse:
+    """Delete one image together with its crops, events, vectors and files.
+
+    Idempotent: an image that is already gone returns 404 rather than a conflict. With
+    ``dry_run`` nothing is written and ``deleted`` holds the counts that would be affected.
+    Refuses with 503 when Milvus is configured but unreachable, because skipping the vector
+    delete would leave search hits pointing at rows that no longer exist.
+    """
+
+    service = MediaDeletionService(db, settings)
+    try:
+        result = service.delete_image(
+            image_id,
+            dry_run=dry_run,
+            delete_files=delete_files,
+            reason=reason,
+        )
+    except MediaDeletionUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return ImageDeletionResponse(
+        image_id=result.image_id,
+        dry_run=result.dry_run,
+        deleted=ImageDeletionCounts(**result.counts),
+        warnings=result.warnings,
+    )
 
 
 @router.get("/images/{image_id}/video-position", response_model=ImageVideoPosition)

@@ -1,5 +1,9 @@
 # 图片与向量删除接口设计
 
+> 实现状态：P0 已实现 —— 服务层 `app/services/media_deletion.py`，端点
+> `DELETE /api/images/{image_id}`（`app/api/media.py`），测试 `tests/test_image_deletion.py`。
+> 批量删除、账本表和异步化还没做。
+
 现在没有删除接口。老脚本 `scripts/cleanup_media_before.py` 只能按时间批量清理，不能按单个素材
 删；而且它写的时候还没有 `person_observation_index`、`crop_face_extractions` 这些表，清单已经
 过期，直接抄会漏东西。

@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
+
 try:
     from datetime import UTC
 except ImportError:
-    from datetime import timezone
-    UTC = timezone.utc
+    UTC = UTC
 from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
@@ -228,3 +228,31 @@ class VideoProcessResponse(BaseModel):
     counting_events_created: int
     image_ids: list[uuid.UUID]
     crop_ids: list[uuid.UUID]
+
+
+class ImageDeletionCounts(BaseModel):
+    """Rows and vectors removed with one image.
+
+    ``milvus`` is keyed by vector object type (``vl_images``, ``vl_person_crops``,
+    ``reid_person_crops``) and holds the number of ids sent to each collection.
+    """
+
+    images: int = 0
+    person_crops: int = 0
+    person_observation_index: int = 0
+    crop_face_extractions: int = 0
+    reid_match_feedback: int = 0
+    recognition_events: int = 0
+    counting_events: int = 0
+    face_embeddings: int = 0
+    vl_embeddings: int = 0
+    vector_index_jobs: int = 0
+    files: int = 0
+    milvus: dict[str, int] = Field(default_factory=dict)
+
+
+class ImageDeletionResponse(BaseModel):
+    image_id: uuid.UUID
+    dry_run: bool
+    deleted: ImageDeletionCounts
+    warnings: list[str] = Field(default_factory=list)

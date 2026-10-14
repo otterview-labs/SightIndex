@@ -110,17 +110,22 @@ class StorageService:
             target.unlink(missing_ok=True)
             raise
 
-    def remove_data_url(self, url: str) -> None:
-        """Remove one internally generated /data URL without allowing path traversal."""
+    def remove_data_url(self, url: str) -> bool:
+        """Remove one internally generated /data URL without allowing path traversal.
+
+        Returns whether a file was actually unlinked, so callers that report deletion counts
+        can tell an existing file apart from an already missing one.
+        """
 
         prefix = "/data/"
         if not url.startswith(prefix):
-            return
+            return False
         root = self.settings.data_dir.resolve()
         target = (root / url.removeprefix(prefix)).resolve()
         if not target.is_relative_to(root):
-            return
+            return False
         try:
             target.unlink(missing_ok=True)
         except OSError:
-            return
+            return False
+        return True
