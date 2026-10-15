@@ -54,7 +54,11 @@ include = ["app*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+# The deployed service runs on Python 3.10, which is why six modules carry a
+# `datetime.UTC` fallback. Targeting py311 here made ruff's UP017 rewrite
+# `timezone.utc` into `datetime.UTC` and drop the fallback import, turning the shim into
+# `UTC = UTC` -- a NameError on import, on the one interpreter the service actually runs.
+target-version = "py310"
 # deploy/agx/reid_service/sapiensid is vendored upstream research code, linted by nobody.
 exclude = [".venv", ".venv312", "deploy/agx/reid_service/sapiensid"]
 

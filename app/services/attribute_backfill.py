@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
+
 try:
     from datetime import UTC
 except ImportError:
