@@ -78,6 +78,10 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
+The requirements files share security version floors in `constraints.security.txt`; `uv.lock`
+contains the resolved versions. Existing installations and container images need an update or rebuild
+to pick up the [dependency security fixes](SECURITY_UPDATES.md).
+
 The example configuration uses SQLite and disables external model services. Build the console and
 start the API:
 

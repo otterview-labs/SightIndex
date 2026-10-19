@@ -3,6 +3,7 @@
 !app/**
 !main.py
 !pyproject.toml
+!constraints.security.txt
 !deploy/
 !deploy/containers/
 !deploy/containers/**
