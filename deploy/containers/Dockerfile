@@ -19,13 +19,14 @@ USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential python3-dev libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
-COPY deploy/containers/requirements.txt /tmp/sightindex-requirements.txt
+COPY constraints.security.txt /tmp/sightindex/constraints.security.txt
+COPY deploy/containers/requirements.txt /tmp/sightindex/deploy/containers/requirements.txt
 RUN python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
-      -r /tmp/sightindex-requirements.txt \
+      -r /tmp/sightindex/deploy/containers/requirements.txt \
     && python -m pip check \
     && python -c "import sys, torch; assert sys.version_info >= (3, 11); assert torch.__version__.split('+')[0] == '2.10.0'" \
     && apt-get purge -y --auto-remove build-essential python3-dev \
-    && rm -f /tmp/sightindex-requirements.txt
+    && rm -f /tmp/sightindex/deploy/containers/requirements.txt
 RUN groupadd --gid 1000 sightindex \
     && useradd --uid 1000 --gid 1000 --create-home sightindex \
     && mkdir -p /opt/sightindex/data /home/sightindex/.cache \

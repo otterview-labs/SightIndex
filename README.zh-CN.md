@@ -85,6 +85,9 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
+各 requirements 文件共用 `constraints.security.txt` 中的安全版本下限，`uv.lock` 记录解析后的版本。
+已安装的环境需要更新依赖，容器需要重新构建，才能应用[依赖安全修复](SECURITY_UPDATES.md)。
+
 示例配置使用 SQLite，并禁用外部模型服务。构建控制台并启动 API：
 
 ```bash
