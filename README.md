@@ -326,8 +326,8 @@ Further references:
 
 ## Licensing and third-party code
 
-This repository does not currently grant a project-wide open-source license. Public visibility
-allows inspection but does not by itself grant reuse rights.
+Unless otherwise noted, original SightIndex code is licensed under the [Apache License 2.0](LICENSE).
+See [LICENSE_SCOPE.md](LICENSE_SCOPE.md) for the scope and exclusions.
 
 The vendored SapiensID inference subset is separately licensed under CC BY-NC 4.0. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the license retained beside that source before
