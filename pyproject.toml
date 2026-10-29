@@ -35,7 +35,7 @@ vision = [
 visual-embedding = [
   "modelscope>=1.22.0",
   "pillow>=10.4.0",
-  "sentence-transformers>=3.0.0",
+  "sentence-transformers>=5.6.0,<6",
   "transformers>=4.57.0",
   "accelerate>=1.11.0",
   "qwen-vl-utils>=0.0.14",
@@ -46,6 +46,10 @@ face-cuda = [
   "opencv-python-headless>=4.10.0",
   "numpy<2",
 ]
+
+[tool.uv]
+# Security floors for transitive dependencies; keep constraints.security.txt in sync.
+constraint-dependencies = ["fsspec>=2026.6.0", "urllib3>=2.8.0"]
 
 [tool.setuptools.packages.find]
 # Without this, setuptools refuses to build: it sees app/, data/ and deploy/ at the top

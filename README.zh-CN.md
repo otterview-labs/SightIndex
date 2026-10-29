@@ -85,6 +85,9 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
+各 requirements 文件共用 `constraints.security.txt` 中的安全版本下限，`uv.lock` 记录解析后的版本。
+已安装的环境需要更新依赖，容器需要重新构建，才能应用[依赖安全修复](SECURITY_UPDATES.md)。
+
 示例配置使用 SQLite，并禁用外部模型服务。构建控制台并启动 API：
 
 ```bash
@@ -296,7 +299,8 @@ scripts/               维护、导入、模型与诊断工具
 
 ## 许可证与第三方代码
 
-本仓库目前没有授予覆盖整个项目的开源许可证。公开可见仅允许查看，本身并不授予复用权利。
+除另有说明的文件外，SightIndex 原创代码采用 [Apache License 2.0](LICENSE)。
+详细适用范围见 [LICENSE_SCOPE.md](LICENSE_SCOPE.md)。
 
 仓库内的 SapiensID 推理子集单独采用 CC BY-NC 4.0 许可证。在使用或再分发它之前，请阅读
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 以及该源码旁保留的许可证。模型权重可能受
