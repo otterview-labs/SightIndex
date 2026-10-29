@@ -43,6 +43,23 @@ class VectorSearchHit:
     score: float
 
 
+def _canonical_embedding_model(model: str) -> str:
+    """Reduce a local model directory path to its repo id.
+
+    The embedding service loads from a local checkout while the API process keeps the
+    HuggingFace repo id in its settings. If each wrote markers with its own value, the
+    marker table split into two labels for the same weights and semantic search silently
+    lost every crop the service had indexed. Both sides now call this before writing.
+    """
+
+    candidate = Path(model)
+    if candidate.is_absolute() or candidate.exists():
+        # A filesystem path such as /data/models/Qwen3-VL-Embedding-2B: the directory
+        # name is the stable part both deployments share.
+        return candidate.name
+    return model
+
+
 def _hnsw_ef(top_k: int) -> int:
     """Search breadth for HNSW, which rejects any ef below the requested k.
 
@@ -821,8 +838,13 @@ class VectorIndexingService:
                 object_type=object_type,
                 object_id=object_id,
                 embedding=None,
+                # The embedding service loads from a local model directory, so its
+                # VISUAL_EMBEDDING_MODEL is a filesystem path while the main app keeps the
+                # HuggingFace repo id. Markers must use one canonical label or the split
+                # makes half the index invisible to search, so both sides resolve to the
+                # repo id: the basename of a path, or the value itself when already one.
                 embedding_model=(
-                    self.settings.visual_embedding_model
+                    _canonical_embedding_model(self.settings.visual_embedding_model)
                     if self.index.visual_embedding.is_enabled()
                     else self.settings.ollama_embedding_model
                 ),
