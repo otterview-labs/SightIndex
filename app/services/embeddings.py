@@ -112,7 +112,10 @@ class VisualEmbeddingService:
             ).embed_text(text)
         elif provider in self.qwen3_vl_providers:
             vector = _Qwen3VLVisualRuntime(
-                model_name_or_path=self.settings.visual_embedding_model,
+                model_name_or_path=(
+                    self.settings.visual_embedding_model_path
+                    or self.settings.visual_embedding_model
+                ),
                 repo_dir=self.settings.qwen3_vl_embedding_repo_dir,
                 extra_pythonpath=self.settings.qwen3_vl_embedding_pythonpath,
                 instruction=self.settings.visual_embedding_instruction,
@@ -159,7 +162,10 @@ class VisualEmbeddingService:
             ).embed_image(image_path)
         elif provider in self.qwen3_vl_providers:
             vector = _Qwen3VLVisualRuntime(
-                model_name_or_path=self.settings.visual_embedding_model,
+                model_name_or_path=(
+                    self.settings.visual_embedding_model_path
+                    or self.settings.visual_embedding_model
+                ),
                 repo_dir=self.settings.qwen3_vl_embedding_repo_dir,
                 extra_pythonpath=self.settings.qwen3_vl_embedding_pythonpath,
                 instruction=self.settings.visual_embedding_instruction,

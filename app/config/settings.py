@@ -106,6 +106,22 @@ class Settings(BaseSettings):
     # edge margin instead of inventing a second definition of "whole person".
     person_crop_require_whole_body: bool = True
     person_crop_edge_margin: int = Field(default=6, ge=0)
+    # Tracking reads a looser list than crop storage, on purpose. Somebody crossing the line is
+    # often half-hidden by a shelf or clipped by the frame edge while walking in -- exactly the
+    # boxes the whole-body rule above rejects. Feeding those to the tracker is what keeps a track
+    # alive across the crossing; storing them as crops would still be the mistake that rule
+    # guards against. So: track wide, store strict.
+    #
+    # The floor is 0.0 and not a second opinion on confidence. The detector already applies its
+    # own floor (yolo_service_confidence, 0.05 on the AGX deployment), so any higher value here
+    # silently deletes detections the detector considered real. Measured on the running AGX
+    # instance on 2026-10-16: the crop filter dropped 592 detections in 24 hours, they were 8.5%
+    # of everything detected, and every single one sat between the detector floor and the crop
+    # floor. 203 frames in that day had people in them and reached the counter as empty. At a
+    # tracking floor of 0.05 a 50-frame sample recovered 16 of 16 dropped detections; at 0.10 it
+    # recovered none.
+    tracking_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    tracking_require_whole_body: bool = False
     # Doorway cameras often devote most pixels to the room rather than the person. Store a
     # display-friendly crop while keeping the scale bounded: this cannot invent detail, but
     # Lanczos resampling plus edge-aware sharpening makes the detail the camera did capture much
@@ -159,6 +175,13 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "qwen3-embedding:4b"
     visual_embedding_provider: str = "none"
     visual_embedding_model: str = "sentence-transformers/clip-ViT-B-32"
+    # Loader-only override. The standalone embedding service loads weights from a local
+    # directory but must write vl_embeddings markers under the same label the API process
+    # uses (the HuggingFace repo id), or the marker table splits into two labels for the
+    # same weights and semantic search silently loses everything the service indexed.
+    # When set, the qwen3-vl loader reads weights from this path while markers keep
+    # visual_embedding_model as the label.
+    visual_embedding_model_path: str | None = None
     visual_embedding_text_model: str | None = None
     visual_embedding_dim: int = Field(default=512, ge=1)
     visual_embedding_device: str | None = None
