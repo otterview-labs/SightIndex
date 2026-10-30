@@ -1,8 +1,10 @@
+import tempfile
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from app.api.deps import AppSettings, DBSession
 from app.schemas.common import SearchFilters
@@ -22,7 +24,7 @@ from app.schemas.semantic_search import (
 from app.services.observation_index import ObservationIndexService
 from app.services.search import VisualSearchService
 from app.services.semantic_search import SemanticSearchService, SemanticSearchUnavailable
-from app.services.vector_index import VectorIndexingService
+from app.services.vector_index import VectorIndexError, VectorIndexingService
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -150,3 +152,29 @@ def search_by_image(
     settings: AppSettings,
 ) -> SearchResponse:
     return VisualSearchService(db, settings).search_by_image(payload)
+
+
+@router.post("/by-image/upload", response_model=SearchResponse)
+def search_by_image_upload(
+    db: DBSession,
+    settings: AppSettings,
+    file: Annotated[UploadFile, File(...)],
+    top_k: int = Query(default=10, ge=1, le=100),
+    min_score: float | None = Query(default=None, ge=0.0, le=1.0),
+) -> SearchResponse:
+    """Rank indexed images by similarity to an uploaded query image.
+
+    Answers "where does this appear" for partial queries -- a torso crop, an object
+    in hand -- which the ReID body-identity channel deliberately does not serve.
+    Works over the visual-embedding vectors ingest already built for images.
+    """
+
+    service = VisualSearchService(db, settings)
+    suffix = Path(file.filename or "query.jpg").suffix or ".jpg"
+    with tempfile.TemporaryDirectory(prefix="sightindex-imgsearch-") as temp_dir:
+        query_path = Path(temp_dir) / f"query{suffix}"
+        query_path.write_bytes(file.file.read())
+        try:
+            return service.search_by_uploaded_image(query_path, top_k, min_score)
+        except VectorIndexError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc

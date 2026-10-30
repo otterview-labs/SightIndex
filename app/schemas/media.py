@@ -25,6 +25,8 @@ class ImageRead(ORMModel):
     captured_at: datetime | None
     video_url: str | None = None
     video_offset_ms: float | None = None
+    # Present after a processed image produced no crops: {"reason": ..., measured values}.
+    crop_reason: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -71,6 +73,16 @@ class ImageSearchRequest(BaseModel):
     top_k: int = Field(default=20, ge=1, le=100)
     target: str = "person_crop"
     filters: SearchFilters = Field(default_factory=SearchFilters)
+
+
+class ImageFileSearchResponse(BaseModel):
+    """Results for an uploaded query image, searched by visual-embedding similarity."""
+
+    items: list["SearchResultItem"]
+    query_image_id: uuid.UUID | None = None
+    model: str
+    min_score: float
+    notice: str = ""
 
 
 class SearchResultItem(BaseModel):

@@ -66,6 +66,51 @@ class VisualSearchService:
         # Face-image lookup and person ReID use their dedicated identity spaces.
         return SearchResponse(items=[])
 
+    def search_by_uploaded_image(
+        self,
+        image_path: Path,
+        top_k: int,
+        min_score: float | None = None,
+    ) -> SearchResponse:
+        """Rank indexed images by visual-embedding similarity to an uploaded query file.
+
+        ReID answers "who is this body" over crops; this answers "which indexed scene
+        contains something that looks like this" over whole images, which is what a
+        partial query (torso, object in hand) needs. Reuses the vl_images vectors the
+        ingest pipeline already builds, so no re-indexing is involved.
+        """
+
+        visual = self.vector_index.visual_embedding
+        if not self.vector_index.is_enabled() or not visual.is_enabled():
+            raise VectorIndexError("Visual vector search is unavailable")
+        try:
+            hits = self.vector_index.search_image("image", image_path, top_k) or []
+        except EmbeddingRuntimeError as exc:
+            raise VectorIndexError(f"Visual embedding failed: {exc}") from exc
+        floor = self.settings.visual_search_min_score if min_score is None else min_score
+        hits = [hit for hit in hits if hit.score >= floor] if floor > 0 else hits
+        if not hits:
+            return SearchResponse(items=[])
+        scores = {hit.object_id: hit.score for hit in hits}
+        images_by_id = {
+            image.id: image
+            for image in self.db.scalars(select(Image).where(Image.id.in_(list(scores))))
+        }
+        items = [
+            SearchResultItem(
+                image_id=image.id,
+                image_url=image.thumbnail_url or image.image_url,
+                score=scores[image.id],
+                source_video_url=image.video_url,
+                video_offset_ms=image.video_offset_ms,
+                captured_at=image.captured_at,
+                location_id=image.location_id,
+            )
+            for hit in hits
+            if (image := images_by_id.get(hit.object_id)) is not None
+        ]
+        return SearchResponse(items=items)
+
     def _search_person_crops(self, payload: VisualSearchRequest) -> SearchResponse:
         requested_top_k = payload.top_k
         persons = self._query_known_persons(payload.query)
