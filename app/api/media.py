@@ -1,10 +1,11 @@
+import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func, select
 
 from app.api.deps import AppSettings, DBSession
@@ -13,6 +14,8 @@ from app.schemas.media import (
     ImageDeletionCounts,
     ImageDeletionResponse,
     ImageRead,
+    ImageTagSearchResponse,
+    ImageTagsUpdate,
     ImageVideoPosition,
     MediaCounts,
     PersonCropRead,
@@ -36,6 +39,21 @@ from app.services.video_processing import (
 
 router = APIRouter(tags=["media"])
 UploadImage = Annotated[UploadFile, File(...)]
+logger = logging.getLogger(__name__)
+
+
+def uploaded_file_size(file: UploadFile) -> int | None:
+    """Return the original multipart file size without relying on a client header."""
+    if file.size is not None:
+        return file.size
+    try:
+        position = file.file.tell()
+        file.file.seek(0, 2)
+        size = file.file.tell()
+        file.file.seek(position)
+        return size
+    except (AttributeError, OSError):
+        return None
 
 
 @router.post("/images/upload", response_model=ImageRead)
@@ -43,12 +61,17 @@ def upload_image(
     db: DBSession,
     settings: AppSettings,
     file: UploadImage,
-    source_type: str = "upload",
-    camera_id: uuid.UUID | None = None,
-    location_id: uuid.UUID | None = None,
-    captured_at: datetime | None = None,
+    source_type: Annotated[str, Form()] = "upload",
+    camera_id: Annotated[uuid.UUID | None, Form()] = None,
+    location_id: Annotated[uuid.UUID | None, Form()] = None,
+    captured_at: Annotated[datetime | None, Form()] = None,
+    folderid: Annotated[str | None, Form()] = None,
+    typenum: Annotated[str | None, Form()] = None,
+    tags: Annotated[list[str] | None, Form()] = None,
 ) -> ImageRead:
     storage = StorageService(settings)
+    original_file_name = file.filename or None
+    image_size = uploaded_file_size(file)
     image_url = storage.save_upload(file)
     try:
         return MediaService(db, settings).create_image_from_url(
@@ -57,6 +80,11 @@ def upload_image(
             camera_id=camera_id,
             location_id=location_id,
             captured_at=captured_at,
+            folderid=folderid,
+            typenum=typenum,
+            original_file_name=original_file_name,
+            image_size=image_size,
+            tags=tags,
         )
     except VectorQueueFullError as exc:
         db.rollback()
@@ -68,19 +96,36 @@ def upload_image(
         raise
 
 
-@router.get("/images", response_model=list[ImageRead])
+@router.get("/images", response_model=list[ImageRead] | ImageTagSearchResponse)
 def list_images(
     db: DBSession,
     settings: AppSettings,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     has_crops: bool = False,
-) -> list[ImageRead]:
-    return MediaService(db, settings).list_images(
-        limit=limit,
-        has_crops=has_crops,
-        offset=offset,
-    )
+    tag: str | None = Query(default=None, max_length=64),
+) -> list[ImageRead] | ImageTagSearchResponse:
+    try:
+        service = MediaService(db, settings)
+        items = service.list_images(
+            limit=limit,
+            has_crops=has_crops,
+            offset=offset,
+            tag=tag,
+        )
+        if tag:
+            normalized_tag = service.normalize_image_tag(tag)
+            return ImageTagSearchResponse(
+                items=items,
+                tag=normalized_tag,
+                total=service.image_count(normalized_tag),
+                limit=limit,
+                offset=offset,
+                notice=f'Exact tag match for "{normalized_tag}"',
+            )
+        return items
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/media/counts", response_model=MediaCounts)
@@ -98,6 +143,23 @@ def get_image(
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return image
+
+
+@router.put("/images/{image_id}/tags", response_model=ImageRead)
+def replace_image_tags(
+    image_id: uuid.UUID,
+    payload: ImageTagsUpdate,
+    db: DBSession,
+    settings: AppSettings,
+) -> ImageRead:
+    service = MediaService(db, settings)
+    image = service.get_image(image_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    try:
+        return service.replace_image_tags(image, payload.tags)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.delete("/images/{image_id}", response_model=ImageDeletionResponse)
@@ -136,6 +198,19 @@ def delete_image(
         deleted=ImageDeletionCounts(**result.counts),
         warnings=result.warnings,
     )
+
+
+@router.delete("/videos", status_code=204)
+def delete_video(
+    video_url: str,
+    db: DBSession,
+    settings: AppSettings,
+) -> Response:
+    try:
+        MediaService(db, settings).delete_video(video_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(status_code=204)
 
 
 @router.get("/images/{image_id}/video-position", response_model=ImageVideoPosition)
@@ -241,6 +316,9 @@ def upload_video(
     db: DBSession,
     settings: AppSettings,
     file: UploadImage,
+    folderid: Annotated[str | None, Form()] = None,
+    original_file_name: Annotated[str | None, Form()] = None,
+    image_size: Annotated[int | None, Form(ge=0)] = None,
     frame_interval_seconds: float = Query(default=1.0, ge=0.1, le=3600),
     max_frames: int = Query(default=120, ge=1, le=2000),
     store_empty_frames: bool | None = None,
@@ -253,6 +331,13 @@ def upload_video(
     captured_at: datetime | None = None,
 ) -> VideoProcessResponse:
     try:
+        
+        original_file_name = original_file_name or file.filename or None
+        image_size = image_size if image_size is not None else uploaded_file_size(file)
+        print(
+            f"Video upload folderid: {folderid}  "
+            f"original_file_name: {original_file_name}  image_size: {image_size}"
+        )
         return VideoProcessingService(db, settings).process_upload(
             file=file,
             frame_interval_seconds=frame_interval_seconds,
@@ -267,6 +352,9 @@ def upload_video(
             camera_id=camera_id,
             location_id=location_id,
             captured_at=captured_at,
+            folderid=folderid,
+            original_file_name=original_file_name,
+            image_size=image_size,
         )
     except VideoProcessingBackpressureError as exc:
         db.rollback()

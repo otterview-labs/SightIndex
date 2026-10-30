@@ -121,6 +121,9 @@ class VideoProcessingService:
         camera_id: uuid.UUID | None = None,
         location_id: uuid.UUID | None = None,
         captured_at: datetime | None = None,
+        folderid: str | None = None,
+        original_file_name: str | None = None,
+        image_size: int | None = None,
     ) -> VideoProcessResponse:
         video_url = self.storage.save_video(file)
         video_path = self._resolve_data_url(video_url)
@@ -138,6 +141,9 @@ class VideoProcessingService:
                 camera_id=camera_id,
                 location_id=location_id,
                 captured_at=captured_at,
+                folderid=folderid,
+                original_file_name=original_file_name,
+                image_size=image_size,
             )
         except Exception:
             self.storage.remove_data_url(video_url)
@@ -154,6 +160,9 @@ class VideoProcessingService:
         camera_id: uuid.UUID | None = None,
         location_id: uuid.UUID | None = None,
         captured_at: datetime | None = None,
+        folderid: str | None = None,
+        original_file_name: str | None = None,
+        image_size: int | None = None,
     ) -> VideoProcessResponse:
         try:
             import cv2  # type: ignore[import-not-found]
@@ -237,6 +246,9 @@ class VideoProcessingService:
                         frame_file,
                         camera_id=camera_id,
                         location_id=location_id,
+                        folderid=folderid,
+                        original_file_name=original_file_name,
+                        image_size=image_size,
                     )
                     crossing_detections, crossing_crop_indices = self.processor.storable_crossings(
                         tracking_detections,
@@ -266,6 +278,9 @@ class VideoProcessingService:
                         frame_file,
                         camera_id=camera_id,
                         location_id=location_id,
+                        folderid=folderid,
+                        original_file_name=original_file_name,
+                        image_size=image_size,
                     )
                     crops = self.processor.process_image(image, detections=detections)
                     self._try_index_frame_image(image)
@@ -326,6 +341,9 @@ class VideoProcessingService:
         frame_file: VideoFrameFile,
         camera_id: uuid.UUID | None = None,
         location_id: uuid.UUID | None = None,
+        folderid: str | None = None,
+        original_file_name: str | None = None,
+        image_size: int | None = None,
     ) -> Image:
         image = Image(
             image_url=frame_file.url,
@@ -335,6 +353,9 @@ class VideoProcessingService:
             captured_at=frame_file.captured_at,
             video_url=frame_file.video_url,
             video_offset_ms=frame_file.offset_ms,
+            folderid=folderid,
+            original_file_name=original_file_name,
+            image_size=image_size,
         )
         self.db.add(image)
         self.db.flush()

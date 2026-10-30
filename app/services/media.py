@@ -1,18 +1,27 @@
+import logging
 import time
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
+from pathlib import Path
 
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.orm import Session, selectinload
 
 from app.config.settings import Settings
-from app.models.events import CountingEvent
-from app.models.media import Image, PersonCrop, VideoStream
+from app.models.events import CountingEvent, RecognitionEvent
+from app.models.media import Image, ImageTag, PersonCrop, PersonObservationIndex, VideoStream
+from app.models.reid import ReidMatchFeedback
+from app.models.vectors import CropFaceExtraction, FaceEmbedding, VectorIndexJob, VLEmbedding
 from app.schemas.media import VideoStreamCreate
 from app.services.opencv_capture import open_video_capture
-from app.services.storage import StorageService
+from app.services.storage import VIDEO_SUFFIXES, StorageService
 from app.services.time_utils import database_datetime, local_now
+
+logger = logging.getLogger(__name__)
+
+MAX_IMAGE_TAGS = 20
+MAX_IMAGE_TAG_LENGTH = 64
 
 
 class MediaService:
@@ -28,6 +37,11 @@ class MediaService:
         camera_id: uuid.UUID | None = None,
         location_id: uuid.UUID | None = None,
         captured_at: datetime | None = None,
+        folderid: str | None = None,
+        typenum: str | None = None,
+        original_file_name: str | None = None,
+        image_size: int | None = None,
+        tags: list[str] | None = None,
     ) -> Image:
         image = Image(
             image_url=image_url,
@@ -43,9 +57,14 @@ class MediaService:
                 if captured_at is not None
                 else None
             ),
+            folderid=folderid,
+            typenum=typenum,
+            original_file_name=original_file_name,
+            image_size=image_size,
         )
         self.db.add(image)
         self.db.flush()
+        self._add_image_tags(image.id, tags)
         enqueued = self._enqueue_image_job_in_session(image)
         self.db.commit()
         self.db.refresh(image)
@@ -62,10 +81,13 @@ class MediaService:
         limit: int = 50,
         has_crops: bool = False,
         offset: int = 0,
+        tag: str | None = None,
     ) -> list[Image]:
-        stmt = select(Image)
+        stmt = select(Image).options(selectinload(Image.image_tags))
         if has_crops:
             stmt = stmt.join(PersonCrop, PersonCrop.image_id == Image.id).distinct()
+        if tag:
+            stmt = stmt.join(ImageTag).where(ImageTag.name == self.normalize_image_tag(tag))
         stmt = stmt.order_by(Image.created_at.desc()).offset(offset).limit(limit)
         return list(self.db.scalars(stmt))
 
@@ -79,8 +101,182 @@ class MediaService:
             "person_crop_count": int(person_crops or 0),
         }
 
+    def image_count(self, tag: str | None = None) -> int:
+        stmt = select(func.count(Image.id))
+        if tag:
+            stmt = stmt.join(ImageTag).where(ImageTag.name == self.normalize_image_tag(tag))
+        return int(self.db.scalar(stmt) or 0)
+
     def get_image(self, image_id: uuid.UUID) -> Image | None:
-        return self.db.get(Image, image_id)
+        return self.db.scalar(
+            select(Image).options(selectinload(Image.image_tags)).where(Image.id == image_id)
+        )
+
+    def replace_image_tags(self, image: Image, tags: list[str]) -> Image:
+        self.db.execute(delete(ImageTag).where(ImageTag.image_id == image.id))
+        self._add_image_tags(image.id, tags)
+        self.db.commit()
+        self.db.refresh(image)
+        self.db.expire(image, ["image_tags"])
+        return image
+
+    @staticmethod
+    def normalize_image_tag(value: str) -> str:
+        normalized = " ".join(value.strip().split()).casefold()
+        if not normalized:
+            raise ValueError("Image tags cannot be empty")
+        if len(normalized) > MAX_IMAGE_TAG_LENGTH:
+            raise ValueError(f"Image tags cannot exceed {MAX_IMAGE_TAG_LENGTH} characters")
+        return normalized
+
+    @classmethod
+    def normalize_image_tags(cls, tags: list[str] | None) -> list[str]:
+        if not tags:
+            return []
+        if len(tags) > MAX_IMAGE_TAGS:
+            raise ValueError(f"An image can have at most {MAX_IMAGE_TAGS} tags")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            value = cls.normalize_image_tag(tag)
+            if value not in seen:
+                normalized.append(value)
+                seen.add(value)
+        return normalized
+
+    def _add_image_tags(self, image_id: uuid.UUID, tags: list[str] | None) -> None:
+        self.db.add_all(
+            ImageTag(image_id=image_id, name=tag) for tag in self.normalize_image_tags(tags)
+        )
+
+    def delete_image(self, image: Image) -> None:
+        """Delete an image and every record or file derived from it."""
+
+        self._delete_images([image])
+
+    def delete_video(self, video_url: str) -> int:
+        """Delete an uploaded source video and all frames derived from it."""
+
+        if not self._is_uploaded_video_url(video_url):
+            raise ValueError("video_url must be a supported file under /data/videos/")
+        images = list(self.db.scalars(select(Image).where(Image.video_url == video_url)))
+        self._delete_images(images)
+        self.storage.remove_data_url(video_url)
+        return len(images)
+
+    def _delete_images(self, images: list[Image]) -> None:
+        if not images:
+            return
+
+        image_ids = [image.id for image in images]
+        file_urls = [
+            url for image in images for url in (image.image_url, image.thumbnail_url)
+        ]
+        crops = list(
+            self.db.scalars(select(PersonCrop).where(PersonCrop.image_id.in_(image_ids)))
+        )
+        file_urls.extend(crop.crop_url for crop in crops)
+        crop_ids = [crop.id for crop in crops]
+        object_ids = [*image_ids, *crop_ids]
+        recognition_ids = list(
+            self.db.scalars(
+                select(RecognitionEvent.id).where(
+                    or_(
+                        RecognitionEvent.image_id.in_(image_ids),
+                        RecognitionEvent.crop_id.in_(crop_ids) if crop_ids else False,
+                    )
+                )
+            )
+        )
+
+        # Some deployed databases retain NO ACTION constraints, so preserve the cleanup
+        # ordering used by scripts/cleanup_media_before.py.
+        self.db.execute(
+            update(VideoStream)
+            .where(VideoStream.last_frame_image_id.in_(image_ids))
+            .values(last_frame_image_id=None)
+        )
+        if crop_ids:
+            self.db.execute(
+                delete(ReidMatchFeedback).where(
+                    or_(
+                        ReidMatchFeedback.query_crop_id.in_(crop_ids),
+                        ReidMatchFeedback.candidate_crop_id.in_(crop_ids),
+                    )
+                )
+            )
+        self.db.execute(
+            delete(PersonObservationIndex).where(
+                or_(
+                    PersonObservationIndex.image_id.in_(image_ids),
+                    PersonObservationIndex.crop_id.in_(crop_ids) if crop_ids else False,
+                )
+            )
+        )
+        self.db.execute(delete(VectorIndexJob).where(VectorIndexJob.object_id.in_(object_ids)))
+        if crop_ids:
+            self.db.execute(
+                delete(CropFaceExtraction).where(CropFaceExtraction.crop_id.in_(crop_ids))
+            )
+        self.db.execute(
+            delete(CountingEvent).where(
+                or_(
+                    CountingEvent.image_id.in_(image_ids),
+                    CountingEvent.crop_id.in_(crop_ids) if crop_ids else False,
+                    CountingEvent.recognition_event_id.in_(recognition_ids)
+                    if recognition_ids
+                    else False,
+                )
+            )
+        )
+        self.db.execute(
+            delete(FaceEmbedding).where(
+                or_(
+                    FaceEmbedding.image_id.in_(image_ids),
+                    FaceEmbedding.crop_id.in_(crop_ids) if crop_ids else False,
+                )
+            )
+        )
+        self.db.execute(delete(VLEmbedding).where(VLEmbedding.object_id.in_(object_ids)))
+        self.db.execute(delete(ImageTag).where(ImageTag.image_id.in_(image_ids)))
+        if recognition_ids:
+            self.db.execute(
+                delete(RecognitionEvent).where(RecognitionEvent.id.in_(recognition_ids))
+            )
+        if crop_ids:
+            self.db.execute(delete(PersonCrop).where(PersonCrop.id.in_(crop_ids)))
+        self.db.execute(delete(Image).where(Image.id.in_(image_ids)))
+        self.db.commit()
+
+        for url in file_urls:
+            if url:
+                self.storage.remove_data_url(url)
+        self._remove_deleted_vectors("image", image_ids)
+        self._remove_deleted_vectors("person_crop", crop_ids)
+        self._remove_deleted_vectors("reid_person_crop", crop_ids)
+
+    @staticmethod
+    def _is_uploaded_video_url(video_url: str) -> bool:
+        return (
+            video_url.startswith("/data/videos/")
+            and Path(video_url).suffix.lower() in VIDEO_SUFFIXES
+        )
+
+    def _remove_deleted_vectors(self, object_type: str, object_ids: list[uuid.UUID]) -> None:
+        if not object_ids or not self.settings.milvus_enabled:
+            return
+        try:
+            from app.services.vector_index import MilvusVectorIndex
+
+            collection = MilvusVectorIndex(self.settings)._collection(object_type)
+            quoted_ids = ", ".join(f'"{object_id}"' for object_id in object_ids)
+            collection.delete(expr=f"object_id in [{quoted_ids}]")
+            collection.flush()
+        except Exception:
+            # SQL is already committed. A later index rebuild can clear stale external vectors.
+            logger.warning(
+                "Could not remove deleted %s vectors from Milvus", object_type, exc_info=True
+            )
 
     def list_person_crops(
         self,

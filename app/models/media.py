@@ -2,8 +2,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 from app.models.types import GUID, json_type
@@ -30,6 +41,37 @@ class Image(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    folderid: Mapped[str | None] = mapped_column(String, nullable=True)
+    typenum: Mapped[str | None] = mapped_column(String, nullable=True)
+    original_file_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    image_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_tags: Mapped[list["ImageTag"]] = relationship(
+        back_populates="image", cascade="all, delete-orphan"
+    )
+
+    @property
+    def tags(self) -> list[str]:
+        return [tag.name for tag in self.image_tags]
+
+
+class ImageTag(Base):
+    """A normalized operator-assigned tag for an image."""
+
+    __tablename__ = "image_tags"
+    __table_args__ = (
+        UniqueConstraint("image_id", "name", name="uq_image_tags_image_name"),
+        Index("ix_image_tags_name_image", "name", "image_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    image_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    image: Mapped[Image] = relationship(back_populates="image_tags")
 
 
 class PersonCrop(Base):
@@ -102,6 +144,9 @@ class PersonObservationIndex(Base):
     # Denormalized from Image so search/observation rows can offer video playback without a join.
     source_video_url: Mapped[str | None] = mapped_column(String, nullable=True)
     video_offset_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Why a processed image produced no person crops. Null when crops exist or the image has
+    # not been processed yet, so the UI can distinguish "nothing to report" from "nothing found".
+    crop_reason: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
     crop_url: Mapped[str | None] = mapped_column(String, nullable=True)
     thumbnail_url: Mapped[str | None] = mapped_column(String, nullable=True)
     bbox: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
