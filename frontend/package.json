@@ -10,7 +10,8 @@
     "test:search": "node --test scripts/test-search.mjs",
     "test:observations": "node --test scripts/test-observations.mjs",
     "gen:api": "openapi-typescript ${OPENAPI_SRC:-http://127.0.0.1:8000/openapi.json} -o src/api/schema.d.ts",
-    "check:api": "node scripts/check-api.mjs"
+    "check:api": "node scripts/check-api.mjs",
+    "check:ui": "node scripts/check-ui.mjs"
   },
   "type": "module",
   "private": "true",

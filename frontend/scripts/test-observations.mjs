@@ -56,7 +56,17 @@ async function mountView(context, overrides = {}) {
       persons: {},
     },
     "@/components/FaceBoxThumb.vue": {},
+    "@/components/DateTimeField.vue": {},
     "@/components/PersonSelect.vue": {},
+    "@/components/VideoPlayerModal.vue": {},
+    "@/composables/useVideoPlayer": {
+      useVideoPlayer: () => ({
+        activeVideo: vue.ref(null),
+        resolvingImageId: vue.ref(""),
+        openVideoAt: async () => {},
+        closeVideo: () => {},
+      }),
+    },
     "@/composables/usePersons": {
       usePersons: () => ({
         persons: vue.ref([]), activePersonId: vue.ref(null), activePersonName: vue.ref(""),

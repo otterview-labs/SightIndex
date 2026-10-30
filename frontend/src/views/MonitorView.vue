@@ -82,6 +82,17 @@ const selectedLiveStream = computed(() =>
   streams.value.find((stream) => stream.id === liveStreamId.value),
 );
 
+// Running first, stopped collapsed. The rail held 28 full-height rows, 26 of them stopped, so the
+// two live cameras were the hardest thing on the page to find.
+const streamGroups = computed(() => {
+  const running = streams.value.filter((stream) => stream.status === "running");
+  const stopped = streams.value.filter((stream) => stream.status !== "running");
+  return [
+    { key: "running", label: `运行中 · ${running.length} 个`, items: running },
+    { key: "stopped", label: `已停止 · ${stopped.length} 个`, items: stopped },
+  ].filter((group) => group.items.length);
+});
+
 const streamForm = ref({
   name: "",
   stream_url: "",
@@ -561,13 +572,14 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="media-grid" :class="{ hidden: mediaView !== 'crops' }">
+      <div class="media-grid media-grid-crops" :class="{ hidden: mediaView !== 'crops' }">
         <EmptyState v-if="!crops.length" title="还没有人物裁剪" />
         <a
           v-for="crop in crops"
           :key="crop.id"
           class="media-item"
           :href="crop.crop_url"
+          :title="`裁剪 ${crop.id}${crop.image_id ? ` · 图片 ${crop.image_id}` : ''}`"
           target="_blank"
           rel="noreferrer"
         >
@@ -579,12 +591,17 @@ onBeforeUnmount(() => {
             title="在源视频中定位此画面"
             @click.prevent.stop="locateVideoFromCrop(crop)"
           >
-            ▶ 定位视频
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="12" cy="12" r="7.5" />
+              <path d="M12 8.5v7M8.5 12h7" />
+            </svg>
+            定位视频
           </button>
           <div class="media-meta">
-            <strong>裁剪 {{ shortId(crop.id) }}</strong>
-            <span>图片 {{ shortId(crop.image_id) }}</span>
-            <span>{{ fmtTime(crop.captured_at || crop.created_at) }}</span>
+            <!-- The capture time is what a reviewer scans for; the two ids are debugging aids and
+                 move to one muted line under it. -->
+            <strong>{{ fmtTime(crop.captured_at || crop.created_at) }}</strong>
+            <span class="media-ids">裁剪 {{ shortId(crop.id) }}</span>
           </div>
         </a>
         <button
@@ -598,7 +615,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div class="media-grid" :class="{ hidden: mediaView !== 'frames' }">
+      <div class="media-grid media-grid-frames" :class="{ hidden: mediaView !== 'frames' }">
         <EmptyState v-if="!images.length" title="还没有原帧" />
         <a
           v-for="image in images"
@@ -656,24 +673,31 @@ onBeforeUnmount(() => {
       </div>
       <div class="stream-list">
         <EmptyState v-if="!streams.length" title="还没有视频流" />
-        <StreamItem
-          v-for="stream in streams"
-          :key="stream.id"
-          :stream="stream"
-          :expanded="expandedIds.has(stream.id)"
-          :editing="editingStreamId === stream.id"
-          :frame="stream.last_frame_image_id ? streamFrames[stream.last_frame_image_id] : null"
-          :busy-action="busyActionFor(stream)"
-          :editor-hint="editingStreamId === stream.id ? editorHint : ''"
-          @toggle="toggleStream(stream)"
-          @start="streamAction(stream, 'start')"
-          @stop="streamAction(stream, 'stop')"
-          @remove="removeStream(stream)"
-          @edit-line="editLine(stream)"
-          @cancel-line="editingStreamId = null"
-          @save-line="(points) => saveLine(stream, points)"
-          @clear-line="clearLine(stream)"
-        />
+        <!-- Two running streams were buried under 26 stopped ones, each a full-height row. Group
+             them so the live sources stay at the top and the stopped ones collapse to one line. -->
+        <template v-for="group in streamGroups" :key="group.key">
+          <details class="stream-group" :open="group.key === 'running'">
+            <summary>{{ group.label }}</summary>
+            <StreamItem
+              v-for="stream in group.items"
+              :key="stream.id"
+              :stream="stream"
+              :expanded="expandedIds.has(stream.id)"
+              :editing="editingStreamId === stream.id"
+              :frame="stream.last_frame_image_id ? streamFrames[stream.last_frame_image_id] : null"
+              :busy-action="busyActionFor(stream)"
+              :editor-hint="editingStreamId === stream.id ? editorHint : ''"
+              @toggle="toggleStream(stream)"
+              @start="streamAction(stream, 'start')"
+              @stop="streamAction(stream, 'stop')"
+              @remove="removeStream(stream)"
+              @edit-line="editLine(stream)"
+              @cancel-line="editingStreamId = null"
+              @save-line="(points) => saveLine(stream, points)"
+              @clear-line="clearLine(stream)"
+            />
+          </details>
+        </template>
       </div>
 
       <details ref="configDetails" class="config-disclosure">

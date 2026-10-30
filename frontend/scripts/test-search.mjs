@@ -31,7 +31,17 @@ async function mountView(context, overrides = {}) {
     vue,
     "@/api/client": { search: api, attributes: {} },
     "@/components/EmptyState.vue": {},
+    "@/components/DateTimeField.vue": {},
     "@/components/SearchResultCard.vue": {},
+    "@/components/VideoPlayerModal.vue": {},
+    "@/composables/useVideoPlayer": {
+      useVideoPlayer: () => ({
+        activeVideo: vue.ref(null),
+        resolvingImageId: vue.ref(""),
+        openVideoAt: async () => {},
+        closeVideo: () => {},
+      }),
+    },
     "@/composables/useToast": {
       useToast: () => ({ showError: error => calls.errors.push(error), toast() {} }),
     },

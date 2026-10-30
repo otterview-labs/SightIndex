@@ -9,7 +9,26 @@ export type CountSummary = Schemas["CountSummary"];
 export type StreamActionResponse = Schemas["StreamActionResponse"];
 export type VideoProcessResponse = Schemas["VideoProcessResponse"];
 
-export type ImageRead = Schemas["ImageRead"];
+export type ImageRead = Schemas["ImageRead"] & { crop_reason?: CropReason | null };
+
+/**
+ * Why a processed image produced no crops. Stored by the backend at process time, so the
+ * console can say "the person box touched the frame edge" instead of just "0 个裁剪候选".
+ */
+export interface CropReason {
+  reason:
+    | "no_raw_detections"
+    | "quality_filtered"
+    | "source_missing"
+    | "already_processed"
+    | string;
+  raw_total?: number;
+  kept?: number;
+  rejected?: Record<string, number>;
+  samples?: Array<Record<string, unknown>>;
+  thresholds?: Record<string, unknown>;
+  reprocessable?: boolean;
+}
 export type PersonCropRead = Schemas["PersonCropRead"];
 export type ImageVideoPosition = Schemas["ImageVideoPosition"];
 

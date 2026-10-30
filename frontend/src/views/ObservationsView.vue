@@ -5,6 +5,7 @@ import { RouterLink } from "vue-router";
 import { face as faceApi, persons as personsApi, search as searchApi } from "@/api/client";
 import type { FaceDiagnosticItem, ObservationIndexItem } from "@/api/types";
 import FaceBoxThumb from "@/components/FaceBoxThumb.vue";
+import DateTimeField from "@/components/DateTimeField.vue";
 import PersonSelect from "@/components/PersonSelect.vue";
 import VideoPlayerModal from "@/components/VideoPlayerModal.vue";
 import { usePersons } from "@/composables/usePersons";
@@ -419,7 +420,9 @@ onMounted(async () => {
               新人姓名
               <input v-model="newPersonName" placeholder="输入姓名" autocomplete="off" required />
             </label>
-            <button class="mini-button primary" type="submit" :disabled="creatingPerson">
+            <!-- The header already carries 刷新 and the filter row owns 查询; a third filled blue
+                 button here made the action cluster read as one undifferentiated block. -->
+            <button class="mini-button" type="submit" :disabled="creatingPerson">
               {{ creatingPerson ? "新增中" : "新增" }}
             </button>
           </form>
@@ -438,14 +441,16 @@ onMounted(async () => {
           关键词
           <input v-model="query" placeholder="姓名 / 黑衣 / 背包 / 摄像头" />
         </label>
-        <label>
-          开始时间
-          <input v-model="startTime" type="datetime-local" />
-        </label>
-        <label>
-          结束时间
-          <input v-model="endTime" type="datetime-local" />
-        </label>
+        <DateTimeField
+          v-model="startTime"
+          label="开始时间"
+          placeholder="选择开始时间"
+        />
+        <DateTimeField
+          v-model="endTime"
+          label="结束时间"
+          placeholder="选择结束时间"
+        />
         <label>
           每页
           <select v-model.number="limit">

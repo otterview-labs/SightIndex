@@ -73,8 +73,10 @@ export const images = {
   listWithCrops: (limit = 60, offset = 0) =>
     api<ImageRead[]>(`/api/images${queryString({ limit, offset, has_crops: true })}`),
   get: (id: string) => api<ImageRead>(`/api/images/${id}`),
-  process: (id: string) =>
-    api<PersonCropRead[]>(`/api/images/${id}/process`, { method: "POST" }),
+  process: (id: string, force = false) =>
+    api<PersonCropRead[]>(`/api/images/${id}/process${force ? "?force=true" : ""}`, {
+      method: "POST",
+    }),
   upload: (body: FormData) =>
     api<ImageRead>("/api/images/upload", { method: "POST", body }),
 };

@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from "vue";
 import { attributes as attributesApi, search as searchApi } from "@/api/client";
 import type { SearchFilters, SearchResultItem, SemanticSearchStatus } from "@/api/types";
 import EmptyState from "@/components/EmptyState.vue";
+import DateTimeField from "@/components/DateTimeField.vue";
 import SearchResultCard from "@/components/SearchResultCard.vue";
 import VideoPlayerModal from "@/components/VideoPlayerModal.vue";
 import { useSummary } from "@/composables/useSummary";
@@ -238,7 +239,12 @@ onMounted(async () => {
 
       <form class="sentinel-search-form" @submit.prevent="runSearch(query)">
         <div class="semantic-input">
-          <span class="semantic-prefix" aria-hidden="true">⌕</span>
+          <span class="semantic-prefix" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <circle cx="11" cy="11" r="6.5" />
+              <path d="m16 16 4.5 4.5" />
+            </svg>
+          </span>
           <input
             v-model="query"
             name="query"
@@ -276,14 +282,18 @@ onMounted(async () => {
                 </option>
               </select>
             </label>
-            <label>
-              开始时间
-              <input v-model="startTime" name="start_time" type="datetime-local" />
-            </label>
-            <label>
-              结束时间
-              <input v-model="endTime" name="end_time" type="datetime-local" />
-            </label>
+            <DateTimeField
+              v-model="startTime"
+              label="开始时间"
+              name="start_time"
+              placeholder="选择开始时间"
+            />
+            <DateTimeField
+              v-model="endTime"
+              label="结束时间"
+              name="end_time"
+              placeholder="选择结束时间"
+            />
             <div class="query-chips" aria-label="常用检索">
               <button
                 v-for="chip in QUERY_CHIPS"
