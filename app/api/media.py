@@ -224,12 +224,13 @@ def process_image(
     image_id: uuid.UUID,
     db: DBSession,
     settings: AppSettings,
+    force: bool = Query(default=False),
 ) -> list[PersonCropRead]:
     image = MediaService(db, settings).get_image(image_id)
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
     try:
-        return FrameProcessingService(db, settings).process_image(image)
+        return FrameProcessingService(db, settings).process_image(image, force=force)
     except VectorQueueFullError as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail=str(exc)) from exc

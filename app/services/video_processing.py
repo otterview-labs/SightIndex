@@ -209,12 +209,18 @@ class VideoProcessingService:
                 )
                 active_frame_path = frame_file.path
                 frame_height, frame_width = frame.shape[:2]
+                raw_detections = self.processor.detect_image_path(frame_file.path)
                 detections = self.processor.quality_filter_detections(
-                    self.processor.detect_image_path(frame_file.path), frame_width, frame_height
+                    raw_detections, frame_width, frame_height
                 )
                 if counting_line is not None:
+                    # Track on the pre-filter boxes; the crop rules below still decide storage.
+                    # Same reasoning as the live capture loop in stream_runtime.
+                    tracking_detections = self.processor.tracking_filter_detections(
+                        raw_detections, frame_width, frame_height
+                    )
                     crossings, next_track_id = self._line_crossings(
-                        detections=detections,
+                        detections=tracking_detections,
                         frame=frame,
                         line=counting_line,
                         tracks=tracks,
@@ -232,15 +238,17 @@ class VideoProcessingService:
                         camera_id=camera_id,
                         location_id=location_id,
                     )
-                    crossing_detections = [
-                        detections[crossing.detection_index] for crossing in crossings
-                    ]
+                    crossing_detections, crossing_crop_indices = self.processor.storable_crossings(
+                        tracking_detections,
+                        [crossing.detection_index for crossing in crossings],
+                        frame_width,
+                        frame_height,
+                    )
                     crops = self.processor.process_image(image, detections=crossing_detections)
                     self._try_index_frame_image(image)
-                    crops_by_detection_index = {
-                        crossing.detection_index: crop
-                        for crossing, crop in zip(crossings, crops, strict=False)
-                    }
+                    crops_by_detection_index = dict(
+                        zip(crossing_crop_indices, crops, strict=False)
+                    )
                     created = self._create_line_crossing_events(
                         crossings=crossings,
                         crops_by_detection_index=crops_by_detection_index,

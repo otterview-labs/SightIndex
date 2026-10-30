@@ -1,0 +1,340 @@
+/* Visual refinements over the four sheets above.
+ *
+ * This layer only fixes defects you can see; it moves no layout and reorders no existing rule, so
+ * the cascade console.css depends on stays exactly as it is (see the note in index.css). Being the
+ * last import it wins on equal specificity, and the few places that need more carry an explicit
+ * prefix. Each block below is a measured defect, not a taste pass.
+ *
+ *   1. every primary button hovered to teal: `--accent-strong` still held the pre-blue generation's
+ *      #087267 while `--accent` had moved to #2f6fed, and the pair is used together in .button.primary
+ *   2. input/select focus glowed teal for the same reason, hard-coded rather than tokenised
+ *   3. the ⌕ in the search box is a text glyph square, not an icon
+ *   4. datetime-local showed "mm/dd/yyyy, --:-- --" in a zh-CN console -- Chromium renders that
+ *      placeholder in the browser's UI language and ignores html[lang]
+ *   5. an empty .table-status chip drew a bordered pill that looked like a broken control
+ *   6. empty states were big dashed rectangles, which read as unfinished rather than "nothing here"
+ *   7. person crops are portrait, but the grid forced them into a 4:3 `contain` box: the crops on
+ *      the box measured 220x540, 292x684, 267x602, so ~70% of every tile was blank
+ *   8. the video-source rail listed 26 stopped streams as full-height rows above the 2 running ones
+ */
+
+:root {
+  /* Old name for "the darker accent", left pointing at the teal that the accent left behind in
+     the fourth generation. The current pair is --accent / --accent-dark. */
+  --accent-strong: #2458c8;
+}
+
+/* ---- 1/2. accent consistency ------------------------------------------------------------ */
+
+.button.primary:hover {
+  background: var(--accent-dark);
+}
+
+.mini-button.primary {
+  border-color: rgb(47 111 237 / 22%);
+}
+
+.button.ghost:hover,
+.mini-button:hover {
+  border-color: rgb(47 111 237 / 34%);
+}
+
+input:focus,
+select:focus {
+  box-shadow: 0 0 0 3px rgb(47 111 237 / 13%);
+}
+
+/* ---- 3. search prefix ------------------------------------------------------------------- */
+
+.semantic-prefix {
+  min-width: 42px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.semantic-prefix svg {
+  width: 18px;
+  height: 18px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- 4. datetime fields ----------------------------------------------------------------- */
+
+.datetime-field-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.datetime-field-control input {
+  width: 100%;
+}
+
+/* Sits on the input's own box (1px border, 11px inset, #fbfcfd) so the native placeholder is
+   covered edge to edge with nothing peeking around it. It steps aside on focus, where the user
+   needs the real "mm/dd/yyyy" editor to type into. */
+.datetime-field-hint {
+  position: absolute;
+  inset: 1px;
+  display: flex;
+  align-items: center;
+  padding: 0 11px;
+  border-radius: 6px;
+  color: #9aa8b6;
+  background: #fbfcfd;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.datetime-field-control:hover .datetime-field-hint {
+  background: #fff;
+}
+
+.datetime-field-control:focus-within .datetime-field-hint {
+  opacity: 0;
+}
+
+/* ---- 5. empty status chip --------------------------------------------------------------- */
+
+/* Present for aria-live, but silent until a diagnosis runs. Same trick .reid-search-state:empty
+   already uses. */
+.table-status:empty {
+  display: none;
+}
+
+/* ---- 6. empty states -------------------------------------------------------------------- */
+
+.empty,
+.media-grid > .empty,
+.stream-list > .empty,
+.diagnostic-list > .empty,
+.trajectory-list > .empty,
+.chat-log > .empty {
+  min-height: 112px;
+  gap: 9px;
+  border: 0;
+  border-radius: 12px;
+  padding: 20px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  box-shadow: inset 0 0 0 1px #eaeff5;
+  font-size: 12.5px;
+}
+
+.empty strong,
+.media-grid > .empty strong,
+.stream-list > .empty strong,
+.diagnostic-list > .empty strong,
+.trajectory-list > .empty strong,
+.chat-log > .empty strong {
+  font-size: 13px;
+}
+
+.empty .muted-text {
+  max-width: 48ch;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/* A system hint is not a drop target; the dashed border made it read as an empty slot.
+   .file-drop and .line-stage keep theirs -- there the dashes mark a real drop/draw area. */
+.message.system {
+  border: 0;
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding-left: 13px;
+  color: #45566b;
+  background: var(--accent-soft);
+}
+
+/* The placeholder that says "上传识别图片后，在这里查看命中人员与相似度" is useful -- only its
+   dashed border said "unfinished". Same treatment as the other empty states, hint kept. */
+.face-workspace .face-main .face-result:empty {
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  box-shadow: inset 0 0 0 1px #eaeff5;
+}
+
+/* ---- 7. person-crop tiles ---------------------------------------------------------------- */
+
+/* Crops on the box measure 0.42-0.58 wide over tall (220x540, 292x684, 267x602, 473x812). The
+   grid forced them into a 4:3 `contain` box, so a 116px-tall cell showed a 47px-wide sliver and
+   ~70% of every tile was empty -- the grid read as blank cards.
+ *
+ * `cover` in a 3:4 box fills the tile, but it can only show ~60% of a portrait crop: measured
+ * against real crops, `object-position: 50% 50%` decapitates the subject and `50% 0%` keeps the
+ * head only for crops where the person sits in the upper half. A crop whose subject is low in
+ * frame would come back as pure wall, which is the defect being fixed.
+ *
+ * Matching the box to the crops instead (`1/2` with `contain`) wastes ~12% of the width and never
+ * cuts anything: at 1440 the subject is roughly twice the linear size it was, and because the
+ * column is narrower the page ends up shorter than it started. Same call the observations table
+ * already made for .observation-thumb (66x140 for the same 0.46 crops). */
+.reference-workspace .media-grid-crops {
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+}
+
+.media-grid-crops .media-item img {
+  aspect-ratio: 1 / 2;
+  object-fit: contain;
+}
+
+.media-grid-crops .media-meta {
+  gap: 2px;
+  padding: 8px 9px 9px;
+}
+
+.media-grid-crops .media-meta strong {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-grid-crops .media-ids {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}.media-grid-crops .media-locate {
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 6px;
+  border-color: rgb(255 255 255 / 26%);
+  background: rgb(15 23 42 / 58%);
+  backdrop-filter: blur(6px);
+  font-size: 11px;
+}
+
+.media-grid-crops .media-locate svg {
+  width: 12px;
+  height: 12px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- 8. video-source rail groups --------------------------------------------------------- */
+
+.stream-list > .stream-group {
+  display: grid;
+  gap: 0;
+}
+
+.stream-group > summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 2px;
+  color: var(--muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.stream-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.stream-group > summary::before {
+  width: 0;
+  height: 0;
+  border: 4px solid transparent;
+  border-left-color: currentcolor;
+  content: "";
+  transition: transform 140ms ease;
+}
+
+.stream-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* The summary is a two-column grid (name+status, then the disclosure on its own row), so the
+   bordered chip stretched the full width of the rail and read as a disabled button. As a
+   right-aligned text link it reads as what it is. */
+.reference-workspace .stream-summary .stream-disclosure {
+  justify-self: end;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  background: transparent;
+  font-size: 11.5px;
+}
+
+.stream-list .stream-item .stream-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 9. faces page ---------------------------------------------------------------------- */
+
+/* FaceBoxThumb draws .face-bbox absolutely and measures it against this frame. .observation-thumb
+   declares position: relative; this one never did, so on the 人脸库 trajectory list the bbox
+   escaped to the nearest positioned ancestor and painted a stray 4x4 red square in the panel
+   header, nowhere near the face it marks. It also needs to be a block box: as an inline anchor
+   around a block image it measured 761x22, so the bbox scaled to nothing even once it was
+   positioned correctly. */
+.trajectory-image-frame {
+  position: relative;
+  display: block;
+  /* .trajectory-list is `display: grid` with an auto track, so a plain block here measured
+     3.35e7px (Chromium's indefinite layout unit) and carried the bbox 16.7M px to the right. A
+     definite fit-content box gives position() the same rectangle the image actually occupies. */
+  width: fit-content;
+  max-width: 100%;
+}
+
+/* FaceZoom.vue shipped with no stylesheet: its frame had no size, no clipping and no positioning
+   context, so the <img> whose width/left/top it computes in JS stayed in the flow at
+   naturalWidth x scale. On 人脸库 that measured 7,776px wide and ~6,900px tall, dragging every
+   trajectory card out with it. The component's arithmetic (centre the face box, 1.25x padding)
+   expects exactly these declarations. */
+.face-zoom-frame {
+  position: relative;
+  overflow: hidden;
+  width: 116px;
+  height: 116px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.face-zoom-frame img {
+  position: absolute;
+}
+
+/* The chip belongs beside the screenshot, not orphaned under a 681px-tall one, and the row it
+   creates fills the 377px of empty card to the right of the image. .trajectory-visuals had no
+   rules of its own, so this defines rather than overrides. */
+.trajectory-visuals {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* .trajectory-list is `display: grid` with no column definition and `overflow: auto`; the auto
+   track resolved to Chromium's indefinite 3.35e7px, so each card laid its meta and note out over
+   33 million pixels and the list scrolled sideways into empty space. */
+.trajectory-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* .button.wide is 100% by design, but that is 1,100px in the main panel and read as a banner.
+   The rail's full-width buttons stay as they are -- the rail is 312px. */
+.face-workspace .face-main .face-form > .button.wide {
+  justify-self: start;
+  width: auto;
+  min-width: 220px;
+  padding-inline: 22px;
+}

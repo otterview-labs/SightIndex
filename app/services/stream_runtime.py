@@ -222,9 +222,15 @@ class StreamRuntime:
                             for track_id, track in tracks.items()
                         }
                         next_track_id_before_crossing = next_track_id
+                        # The tracker sees the detector output before the crop filter. Someone
+                        # walking in is clipped by the frame edge for most of the crossing, and
+                        # the whole-body rule would delete them right there.
+                        tracking_detections = processor.tracking_filter_detections(
+                            raw_detections, frame_width, frame_height
+                        )
                         count_service = VideoProcessingService(db, settings)
                         crossings, next_track_id = count_service._line_crossings(
-                            detections=detections,
+                            detections=tracking_detections,
                             frame=frame,
                             line=counting_line,
                             tracks=tracks,
@@ -250,9 +256,12 @@ class StreamRuntime:
                             continue
 
                         image = self._create_frame_image(db, stream, frame_url, captured_at)
-                        crossing_detections = [
-                            detections[crossing.detection_index] for crossing in crossings
-                        ]
+                        crossing_detections, crossing_crop_indices = processor.storable_crossings(
+                            tracking_detections,
+                            [crossing.detection_index for crossing in crossings],
+                            frame_width,
+                            frame_height,
+                        )
                         try:
                             crops = processor.process_image(image, detections=crossing_detections)
                         except VectorQueueFullError as exc:
@@ -275,10 +284,9 @@ class StreamRuntime:
                             stop_event.wait(backoff_seconds)
                             continue
                         self._try_index_frame_image(db, image, settings)
-                        crops_by_detection_index = {
-                            crossing.detection_index: crop
-                            for crossing, crop in zip(crossings, crops, strict=False)
-                        }
+                        crops_by_detection_index = dict(
+                            zip(crossing_crop_indices, crops, strict=False)
+                        )
                         count_service._create_line_crossing_events(
                             crossings=crossings,
                             crops_by_detection_index=crops_by_detection_index,

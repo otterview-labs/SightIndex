@@ -66,6 +66,13 @@ def _ensure_compatible_schema() -> None:
                 connection.execute(
                     text(f"ALTER TABLE images ADD COLUMN video_offset_ms {offset_type}")
                 )
+            # Additive and nullable: old rows stay null (unknown), and every row processed after
+            # this upgrade records the rule that produced its zero-crop result.
+            if "crop_reason" not in image_columns:
+                reason_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
+                connection.execute(
+                    text(f"ALTER TABLE images ADD COLUMN crop_reason {reason_type}")
+                )
     if "crop_face_extractions" in table_names:
         face_cache_columns = {
             column["name"] for column in inspector.get_columns("crop_face_extractions")

@@ -85,6 +85,21 @@ class ImageFileSearchResponse(BaseModel):
     notice: str = ""
 
 
+class ImageTagSearchResponse(BaseModel):
+    """Envelope for a tag-filtered image listing: the page plus the tag total."""
+
+    items: list[ImageRead]
+    tag: str
+    total: int
+    limit: int
+    offset: int
+    notice: str = ""
+
+
+class ImageTagsUpdate(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+
+
 class SearchResultItem(BaseModel):
     crop_id: uuid.UUID | None = None
     image_id: uuid.UUID | None = None

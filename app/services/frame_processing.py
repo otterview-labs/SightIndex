@@ -387,13 +387,112 @@ class FrameProcessingService:
             if self._is_quality_detection(detection, frame_width, frame_height)
         ]
 
+    def is_quality_detection(
+        self,
+        detection: Detection,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> bool:
+        """Whether this detection may be stored as a person crop. See _is_quality_detection."""
+
+        return self._is_quality_detection(detection, frame_width, frame_height)
+
+    def tracking_filter_detections(
+        self,
+        detections: list[Detection],
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> list[Detection]:
+        """Detections that feed line crossing, filtered by the tracking rules instead.
+
+        Deliberately looser than the crop filter: a track that loses a person mid-crossing cannot
+        recover later, while a crop the whole-body rule rejects can simply wait for a cleaner
+        frame. The low-confidence boxes are also what a real tracker's second association stage
+        uses to re-link someone after a brief occlusion.
+        """
+
+        return [
+            detection
+            for detection in detections
+            if self._is_trackable_detection(detection, frame_width, frame_height)
+        ]
+
+    def is_trackable_detection(
+        self,
+        detection: Detection,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> bool:
+        """Whether this detection feeds line crossing. See _is_trackable_detection."""
+
+        return self._is_trackable_detection(detection, frame_width, frame_height)
+
+    def storable_crossings(
+        self,
+        tracking_detections: list[Detection],
+        crossing_indices: list[int],
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> tuple[list[Detection], list[int]]:
+        """Split crossing detections into the ones that may become crops, and their indices.
+
+        A crossing is counted whether or not a crop qualifies: an occluded person still walked
+        through the door, and dropping the count would understate traffic. The returned indices
+        point into the detector output, so the caller can still attach the crops it gets back.
+        """
+
+        pairs = [
+            (index, tracking_detections[index])
+            for index in crossing_indices
+            if 0 <= index < len(tracking_detections)
+            and self._is_quality_detection(tracking_detections[index], frame_width, frame_height)
+        ]
+        return [detection for _, detection in pairs], [index for index, _ in pairs]
+
+    def _is_trackable_detection(
+        self,
+        detection: Detection,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> bool:
+        if detection.confidence < self.settings.tracking_min_confidence:
+            return False
+        bbox = detection.bbox
+        width = int(bbox.get("width", 0) or 0)
+        height = int(bbox.get("height", 0) or 0)
+        if width <= 0 or height <= 0:
+            return False
+        if (
+            self.settings.tracking_require_whole_body
+            and frame_width
+            and frame_height
+            and self._touches_frame_edge(bbox, width, height, frame_width, frame_height)
+        ):
+            return False
+        return True
+
+    def _record_crop_reason(self, image: Image, reason: dict[str, Any] | None) -> None:
+        """Persist the zero-crop explanation without ever letting diagnostics break processing."""
+
+        image.crop_reason = reason
+        if self.db is None:
+            return
+        try:
+            self.db.add(image)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.debug("could not persist crop diagnostics", exc_info=True)
+
     def process_image(
         self,
         image: Image,
         detections: list[Detection] | None = None,
+        force: bool = False,
     ) -> list[PersonCrop]:
         image_path = self._resolve_data_url(image.image_url)
         if image_path is None or not image_path.exists():
+            self._record_crop_reason(image, {"reason": "source_missing"})
             return []
         original_thumbnail_url = image.thumbnail_url
         annotated_url: str | None = None
@@ -415,16 +514,29 @@ class FrameProcessingService:
                 .where(PersonCrop.image_id == image.id)
                 .order_by(PersonCrop.created_at, PersonCrop.id)
             ))
-            if image.processed_at is not None or existing:
+            if existing:
                 image.processed_at = image.processed_at or datetime.now(UTC)
                 self.db.commit()
                 return existing
+            if image.processed_at is not None and not force:
+                # Already decided and nothing came out of it. Only an explicit reprocess may
+                # re-open that verdict; without it, retrying would re-detect and re-insert.
+                if image.crop_reason is None:
+                    image.crop_reason = {"reason": "already_processed", "reprocessable": True}
+                    self.db.add(image)
+                self.db.commit()
+                return []
+            # A forced reprocess is a re-decision: drop the previous verdict before looking.
+            image.crop_reason = None
             raw_detections = (
                 detections if detections is not None else self.detector.detect(image_path)
             )
             frame_width, frame_height = self._read_image_size(image.image_url)
             image_detections = self.quality_filter_detections(
                 raw_detections, frame_width, frame_height
+            )
+            image.crop_reason = self._crop_diagnostics(
+                raw_detections, image_detections, frame_width, frame_height
             )
             if image_detections:
                 annotated_url = self._create_annotated_frame_file(image_path, image_detections)
@@ -597,29 +709,114 @@ class FrameProcessingService:
         crop = self._enhance_crop(cv2, crop)
         return self._write_jpeg(cv2, target, crop, self.settings.person_crop_jpeg_quality)
 
-    def _is_quality_detection(
+    def _quality_rejection_reason(
         self,
         detection: Detection,
         frame_width: int | None = None,
         frame_height: int | None = None,
-    ) -> bool:
+    ) -> str | None:
+        """The gate rule that drops this detection, or None when it passes.
+
+        The filter and the zero-crop explanation deliberately share this function: a "0
+        crops" upload was indistinguishable from a bug, so the stored reason has to be the
+        rule that actually ran rather than a second copy that can drift from it.
+        """
         bbox = detection.bbox
         width = int(bbox.get("width", 0) or 0)
         height = int(bbox.get("height", 0) or 0)
         if detection.confidence < self.settings.person_crop_min_confidence:
-            return False
+            return "below_min_confidence"
         if width < self.settings.person_crop_min_bbox_width:
-            return False
+            return "too_small"
         if height < self.settings.person_crop_min_bbox_height:
-            return False
+            return "too_small"
         if (
             self.settings.person_crop_require_whole_body
             and frame_width
             and frame_height
             and self._touches_frame_edge(bbox, width, height, frame_width, frame_height)
         ):
-            return False
-        return True
+            return "touches_frame_edge"
+        return None
+
+    def _is_quality_detection(
+        self,
+        detection: Detection,
+        frame_width: int | None = None,
+        frame_height: int | None = None,
+    ) -> bool:
+        return self._quality_rejection_reason(detection, frame_width, frame_height) is None
+
+    def _edge_gaps_px(
+        self,
+        bbox: dict[str, Any],
+        frame_width: int,
+        frame_height: int,
+    ) -> dict[str, int]:
+        """Distance from each box side to the matching frame edge, for the stored reason."""
+
+        x = int(bbox.get("x", 0) or 0)
+        y = int(bbox.get("y", 0) or 0)
+        width = int(bbox.get("width", 0) or 0)
+        height = int(bbox.get("height", 0) or 0)
+        return {
+            "left": x,
+            "top": y,
+            "right": frame_width - (x + width),
+            "bottom": frame_height - (y + height),
+        }
+
+    def _crop_diagnostics(
+        self,
+        raw_detections: list[Detection],
+        image_detections: list[Detection],
+        frame_width: int | None,
+        frame_height: int | None,
+    ) -> dict[str, Any] | None:
+        """A compact, stored explanation for a zero-crop result.
+
+        Returns None as soon as one crop survives: the crops are the explanation then. That
+        also keeps the high-volume stream path from rewriting this JSON on every frame.
+        """
+
+        if image_detections:
+            return None
+        thresholds = {
+            "min_confidence": self.settings.person_crop_min_confidence,
+            "min_bbox_width": self.settings.person_crop_min_bbox_width,
+            "min_bbox_height": self.settings.person_crop_min_bbox_height,
+            "require_whole_body": self.settings.person_crop_require_whole_body,
+            "edge_margin": self.settings.person_crop_edge_margin,
+        }
+        if not raw_detections:
+            return {"reason": "no_raw_detections", "raw_total": 0, "thresholds": thresholds}
+        rejected: dict[str, int] = {}
+        samples: list[dict[str, Any]] = []
+        for detection in raw_detections:
+            rule = self._quality_rejection_reason(detection, frame_width, frame_height)
+            if rule is None:
+                continue
+            rejected[rule] = rejected.get(rule, 0) + 1
+            if len(samples) < 3:
+                sample: dict[str, Any] = {
+                    "bbox": detection.bbox,
+                    "confidence": detection.confidence,
+                    "rejected_by": rule,
+                }
+                if rule == "touches_frame_edge" and frame_width and frame_height:
+                    sample["edge_gaps_px"] = self._edge_gaps_px(
+                        detection.bbox, frame_width, frame_height
+                    )
+                samples.append(sample)
+        return {
+            "reason": "quality_filtered",
+            "raw_total": len(raw_detections),
+            "kept": 0,
+            "rejected": rejected,
+            "samples": samples,
+            "frame": {"width": frame_width, "height": frame_height},
+            "thresholds": thresholds,
+        }
 
     def _touches_frame_edge(
         self,

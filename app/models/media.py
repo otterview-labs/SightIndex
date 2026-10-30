@@ -24,6 +24,9 @@ class Image(Base):
     # this frame inside it, so a viewer can seek straight to the moment the frame shows.
     video_url: Mapped[str | None] = mapped_column(String, nullable=True)
     video_offset_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Why a processed image produced no person crops. Null when crops exist or the image has
+    # not been processed yet, so the UI can distinguish "nothing to report" from "nothing found".
+    crop_reason: Mapped[dict[str, Any] | None] = mapped_column(json_type(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
