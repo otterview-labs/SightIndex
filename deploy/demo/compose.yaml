@@ -56,7 +56,10 @@ services:
       driver: json-file
       options: {max-size: 5m, max-file: "2"}
   ingress:
-    image: caddy:2
+    image: ${SIGHTINDEX_DEMO_INGRESS_IMAGE:-sightindex-demo-ingress:local}
+    build:
+      context: ../..
+      dockerfile: deploy/demo/ingress.Dockerfile
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
