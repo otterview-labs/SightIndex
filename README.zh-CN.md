@@ -7,13 +7,18 @@
 SightIndex 接入素材，提取原始帧与人员裁剪图，通过 Vue 控制台和 API 查看、检索。
 先用 CPU 跑通上传与检测；需要文字检索或跨镜头候选时，再接入 embedding、VLM 和 ReID 服务。
 
-[看看实际界面](docs/showcase.zh-CN.md) · [跑通样例](docs/showcase.zh-CN.md#本地体验) ·
+[在线体验](http://43.153.213.96/search) · [看看实际界面](docs/showcase.zh-CN.md) · [跑通样例](docs/showcase.zh-CN.md#本地体验) ·
 [快速开始](#快速开始) · [部署说明](docs/deployment.zh-CN.md)
 
 [![SightIndex 实际控制台：按已有标签检索 HOG 裁剪图](docs/assets/console-search.png)](docs/showcase.zh-CN.md)
 
 *实际页面截图，使用公开 NASA 样例、SQLite 和 OpenCV HOG。输入“深色”匹配的是 CV 已提取的标签；
 未启用语义检索、人脸识别或 ReID。图片来源与使用边界见[样例说明](samples/README.md)。*
+
+**不用安装，直接试试：**打开[在线演示](http://43.153.213.96/search)，点击“深色”检索，
+再到观察表核对裁剪和原图，无需注册或登录。演示通过实际 API 检索一张公开照片的两个预处理裁剪，
+仅供查看，不接收上传，也不执行语义、人脸或 ReID 推理。
+部署方法和演示范围见[说明](deploy/demo/README.md)。
 
 ## 从素材到人工复核
 
@@ -58,7 +63,7 @@ SightIndex 返回排序后的证据和置信度元数据。ReID 结果只是候�
 | --- | --- |
 | 上传图片，查看素材记录 | 默认 SQLite 配置 |
 | 处理图片，查看检测出的人员 | 默认 OpenCV HOG 检测器，结果取决于图片 |
-| 按已有标签检索 | 默认 CV 色调处理可产生基础外观标签；更丰富的属性需配置 VLM |
+| 按已有标签检索 | CV 色调处理需本地姿态模型权重才能产生基础外观标签；更丰富的属性需配置 VLM |
 | 用文字描述检索候选画面 | 语义 embedding、Milvus 与已建立的索引 |
 | 比较不同摄像头的人员候选 | 可选 ReID 服务与索引，结果需人工核验 |
 

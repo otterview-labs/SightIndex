@@ -8,7 +8,7 @@ SightIndex turns media into source frames and person crops that you can inspect 
 or retrieve through an API. Start with a CPU-only local workflow; add embedding, VLM or ReID
 services when you need semantic search or cross-camera candidates.
 
-[Console tour](docs/showcase.md) · [Try the sample](docs/showcase.md#try-it-locally) ·
+[Live demo](http://43.153.213.96/search) · [Console tour](docs/showcase.md) · [Try the sample](docs/showcase.md#try-it-locally) ·
 [Quick start](#quick-start) · [Deployment](docs/deployment.md)
 
 [![SightIndex console: strict-label search over actual HOG crops](docs/assets/console-search.png)](docs/showcase.md)
@@ -16,6 +16,12 @@ services when you need semantic search or cross-camera candidates.
 *Actual console, public NASA sample, SQLite + OpenCV HOG. The query `深色` means “dark clothing”
 and matches existing CV-derived labels. No semantic, face or ReID service is running.
 [Sample credit and limitations](samples/README.md). UI shown in its current Chinese version.*
+
+**Try it in your browser:** open the [public demo](http://43.153.213.96/search), click `深色`
+(dark clothing), then inspect the crops and original photograph in the observation table.
+No account or installation is needed. The read-only demo searches two preprocessed crops from
+one credited public photograph through the real API. It does not accept uploads or run semantic,
+face or ReID inference. [Demo setup and boundaries](deploy/demo/README.md).
 
 ## From media to review
 
@@ -49,7 +55,7 @@ of identity or a continuous path between cameras.
 | --- | --- |
 | Upload an image and inspect its record | Default SQLite configuration |
 | Process an image and inspect detected people | Default OpenCV HOG detector; results depend on the image |
-| Search by available labels | The default CV tone pass can produce basic appearance labels; richer attributes require a configured VLM |
+| Search by available labels | CV tone extraction needs local pose weights to produce basic appearance labels; richer attributes require a configured VLM |
 | Retrieve candidates from a text description | Configure semantic embeddings, Milvus and an indexed collection |
 | Compare people across cameras | Configure the optional ReID service and its index; verify candidates manually |
 
