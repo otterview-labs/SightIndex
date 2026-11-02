@@ -2,17 +2,32 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [First run](docs/first-run.md) | [Issues](https://github.com/otterview-labs/SightIndex/issues)
 
-SightIndex is a self-hosted visual indexing and retrieval service. It accepts images, videos, and
-RTSP/HTTP streams; extracts searchable media and person crops; and exposes the results through a
-FastAPI API and a Vue console.
+**Search images, video and camera footage in your own workspace.**
 
-Use it to organize local media, inspect detected person crops, and retrieve candidate frames for
-human review. The default setup lets you try ingestion and the console. Semantic search and
-cross-camera candidate retrieval require additional model services and indexes.
+SightIndex turns media into source frames and person crops that you can inspect in a Vue console
+or retrieve through an API. Start with a CPU-only local workflow; add embedding, VLM or ReID
+services when you need semantic search or cross-camera candidates.
 
-The repository is an experimental reference implementation. Face recognition and person
-re-identification process biometric data. Deploy them only with a lawful basis, appropriate
-consent, access controls, retention limits, and human review.
+[Console tour](docs/showcase.md) · [Try the sample](docs/showcase.md#try-it-locally) ·
+[Quick start](#quick-start) · [Deployment](docs/deployment.md)
+
+[![SightIndex console: strict-label search over actual HOG crops](docs/assets/console-search.png)](docs/showcase.md)
+
+*Actual console, public NASA sample, SQLite + OpenCV HOG. The query `深色` means “dark clothing”
+and matches existing CV-derived labels. No semantic, face or ReID service is running.
+[Sample credit and limitations](samples/README.md). UI shown in its current Chinese version.*
+
+## From media to review
+
+1. **Ingest** an image, a video file, or an RTSP/HTTP stream.
+2. **Inspect** source frames, detector crops and the attributes available for each crop.
+3. **Retrieve** by existing labels, or use separately configured semantic/ReID indexes for candidates.
+4. **Review** the original evidence. Video-derived records can open their source video at the
+   stored offset; a still-image upload has no video to play.
+
+SightIndex is an experimental reference implementation. Results require human review; similarity
+scores do not establish identity or a continuous path across cameras. For biometric features,
+use an appropriate lawful basis, consent, access controls and retention limits.
 
 ## What is included
 
@@ -34,7 +49,7 @@ of identity or a continuous path between cameras.
 | --- | --- |
 | Upload an image and inspect its record | Default SQLite configuration |
 | Process an image and inspect detected people | Default OpenCV HOG detector; results depend on the image |
-| Search by parsed attributes | Analyze crops with a configured VLM; the default setup has no parsed attributes |
+| Search by available labels | The default CV tone pass can produce basic appearance labels; richer attributes require a configured VLM |
 | Retrieve candidates from a text description | Configure semantic embeddings, Milvus and an indexed collection |
 | Compare people across cameras | Configure the optional ReID service and its index; verify candidates manually |
 
@@ -106,7 +121,17 @@ Then open:
 For frontend development, run `npm --prefix frontend run dev`; Vite listens on port `5173` and
 proxies API calls to `http://127.0.0.1:8000` by default.
 
-Next, follow [upload, process and inspect](docs/first-run.md#upload-process-and-inspect).
+Try the bundled, credited public photograph against your own instance:
+
+```bash
+.venv/bin/python scripts/demo_walkthrough.py
+```
+
+This uploads one image, processes it, checks the stored record and verifies that a processing
+retry reuses the same crops. It does not download model weights or call external models.
+Open `/observations` to inspect the results. Detection counts vary; this is a workflow check,
+not an accuracy benchmark. See the [console tour](docs/showcase.md) for screenshots and boundaries,
+or [upload, process and inspect](docs/first-run.md#upload-process-and-inspect) for individual API calls.
 
 ## Deployment
 

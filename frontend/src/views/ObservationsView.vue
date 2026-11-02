@@ -680,3 +680,51 @@ onMounted(async () => {
     <VideoPlayerModal v-if="activeVideo" :video="activeVideo" @close="closeVideo" />
   </main>
 </template>
+
+<style scoped>
+/* Keep the wide evidence table inside its scroll container, rather than allowing
+   its minimum content width to expand every row of the parent grid. */
+.observation-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 860px) {
+  .observation-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .observation-filters > label,
+  .filter-toggles,
+  .observation-filters > button {
+    grid-column: 1 / -1;
+  }
+
+  .filter-toggles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .observation-filters :is(label, input, select),
+  .observation-person-create,
+  .observation-person-create label {
+    min-width: 0;
+  }
+
+  .observation-person-create {
+    flex: 1 1 100%;
+  }
+
+  .observation-person-create label {
+    flex: 1;
+  }
+
+  .observation-person-create input {
+    width: 100%;
+  }
+
+  :is(button, input:not([type="checkbox"]), select, .filter-toggle) {
+    min-height: 44px;
+  }
+}
+</style>

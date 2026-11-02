@@ -33,9 +33,11 @@ whether an upload succeeded.
 ## Upload, process and inspect
 
 Use a JPEG or PNG you are allowed to process. An image with clearly visible people is useful
-for trying the default detector. The repository does not bundle a public sample dataset.
+for trying the default detector. A credited public photograph is included in `samples/nasa-walk.jpg`;
+see the [console tour](showcase.md) for its source, captured results and limitations.
+You can run `.venv/bin/python scripts/demo_walkthrough.py` to check the sequence below.
 
-1. Upload an image using the console or the request below.
+1. Upload an image using the request below (or `/docs` → `POST /api/images/upload`).
 2. Copy the returned `id`; uploading creates a media record, while person detection is a separate step.
 3. Process that image and inspect the returned crop list.
 4. Return to the console or list the crops to compare them with the original image.
@@ -80,7 +82,7 @@ Reprocessing existing media requires a separate data-reprocessing workflow.
 | --- | --- |
 | Upload succeeds but counts stay at zero | Query the image record and confirm that `/process` ran. Images without crops do not contribute to these counts. |
 | People are visible but the crop list is empty | Inspect the source image, selected detector and parameters. The default HOG detector can miss people; try a clear image before evaluating a different model. |
-| Attribute search returns no matches | The default configuration does not parse attributes. Check the VLM setup, crop analysis and whether the relevant fields exist. |
+| Attribute search returns no matches | The default CV tone pass can produce basic appearance labels. Richer attributes require VLM analysis. Check whether the requested fields actually exist. |
 | Semantic search returns no matches | Check the embedding service, Milvus collection, historical index and coverage. Enabling the flag does not build an index. |
 | Results do not change after switching models | Processed images reuse their results. Vector-model or preprocessing changes also require a separate collection; plan reprocessing and indexing using the deployment guide. |
 | API or media requests return 401 | Check whether Basic Auth is enabled and use your configured account. Keep passwords out of issue reports. |
@@ -89,7 +91,7 @@ Reprocessing existing media requires a separate data-reprocessing workflow.
 
 | Workflow | Additional setup |
 | --- | --- |
-| Parsed-attribute search | Configure a VLM and analyze crops. Strict matching cannot match missing attributes. |
+| Existing-label search | Basic CV tone labels may exist by default. Configure VLM analysis for richer attributes. Strict matching cannot match missing fields. |
 | Semantic text search | Configure Qwen embeddings, a separate Milvus visual collection and its index. Verify coverage before enabling `SEMANTIC_SEARCH_ENABLED`. |
 | Cross-camera candidates | Configure ReID and its index, then evaluate on a labeled dataset. |
 

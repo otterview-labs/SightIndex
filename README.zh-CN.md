@@ -2,17 +2,31 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [首次体验](docs/first-run.zh-CN.md) | [反馈问题](https://github.com/otterview-labs/SightIndex/issues)
 
-SightIndex 是一项可自行托管的视觉索引与检索服务。它接收图像、视频以及 RTSP/HTTP
-视频流，提取可检索的媒体内容和人员裁剪图，并通过 FastAPI API 与 Vue 控制台提供结果。
+**在自己的环境里，检索图片、视频和摄像头画面。**
 
-可以用它管理本地素材、查看检测出的人员裁剪图，再检索候选画面供人工核对。默认配置可体验素材上传与控制台；语义检索和跨摄像头候选检索需要另行配置模型服务与索引。
+SightIndex 接入素材，提取原始帧与人员裁剪图，通过 Vue 控制台和 API 查看、检索。
+先用 CPU 跑通上传与检测；需要文字检索或跨镜头候选时，再接入 embedding、VLM 和 ReID 服务。
 
-仅对接“上传、检索、人脸库”时，请参阅 [核心接口文档](docs/api-core-functions.zh-CN.md)
-和配套的 [精简 OpenAPI](docs/openapi-core-functions.json)，其中注明了北京已部署版本的参数、
-调用顺序、示例与尚未实现的能力。
+[看看实际界面](docs/showcase.zh-CN.md) · [跑通样例](docs/showcase.zh-CN.md#本地体验) ·
+[快速开始](#快速开始) · [部署说明](docs/deployment.zh-CN.md)
 
-本仓库是实验性参考实现。人脸识别和人员重识别会处理生物特征数据。请仅在具备合法依据、
-适当同意、访问控制、留存期限和人工复核机制的情况下部署这些功能。
+[![SightIndex 实际控制台：按已有标签检索 HOG 裁剪图](docs/assets/console-search.png)](docs/showcase.zh-CN.md)
+
+*实际页面截图，使用公开 NASA 样例、SQLite 和 OpenCV HOG。输入“深色”匹配的是 CV 已提取的标签；
+未启用语义检索、人脸识别或 ReID。图片来源与使用边界见[样例说明](samples/README.md)。*
+
+## 从素材到人工复核
+
+1. **接入素材**：图片、视频文件或 RTSP/HTTP 视频流。
+2. **查看结果**：原始帧、人员裁剪图，以及裁剪图上实际已有的属性。
+3. **检索候选**：按已有标签匹配，或通过另行配置的语义、ReID 索引查找候选。
+4. **核对原始证据**：视频产生的记录可以按保存的时间偏移打开源视频；上传的静态图片没有源视频。
+
+本项目是实验性参考实现。检索结果需人工核验，相似度不能证明身份或跨镜头连续轨迹。
+使用生物特征功能时，请具备适当的合法依据、同意、访问控制与留存期限。
+
+仅对接“上传、检索、人脸库”时，请参阅[核心接口文档](docs/api-core-functions.zh-CN.md)
+和配套的[精简 OpenAPI](docs/openapi-core-functions.json)，其中注明部署版本、调用顺序与尚未实现的能力。
 
 ## 包含内容
 
@@ -44,7 +58,7 @@ SightIndex 返回排序后的证据和置信度元数据。ReID 结果只是候�
 | --- | --- |
 | 上传图片，查看素材记录 | 默认 SQLite 配置 |
 | 处理图片，查看检测出的人员 | 默认 OpenCV HOG 检测器，结果取决于图片 |
-| 按解析后的属性检索 | 配置 VLM 并解析裁剪图，默认配置没有解析属性 |
+| 按已有标签检索 | 默认 CV 色调处理可产生基础外观标签；更丰富的属性需配置 VLM |
 | 用文字描述检索候选画面 | 语义 embedding、Milvus 与已建立的索引 |
 | 比较不同摄像头的人员候选 | 可选 ReID 服务与索引，结果需人工核验 |
 
@@ -112,6 +126,17 @@ curl --fail http://127.0.0.1:8000/api/media/counts
 API 请求代理到 `http://127.0.0.1:8000`。
 
 接下来按[首次体验](docs/first-run.zh-CN.md#上传处理和查看结果)完成图片上传与处理。
+
+仓库附带一张注明来源的公开图片，可在自己的实例上运行：
+
+```bash
+.venv/bin/python scripts/demo_walkthrough.py
+```
+
+脚本上传一张图片、执行检测、查询素材记录，并检查重复处理是否复用裁剪。
+不下载模型，不调用外部模型服务。打开 `/observations` 查看结果。
+检测数量会随模型与版本变化，这条流程用于验证操作，不是准确率测试。
+界面与步骤见[实际界面与样例](docs/showcase.zh-CN.md)。
 
 ## 部署
 
