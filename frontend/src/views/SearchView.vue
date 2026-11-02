@@ -79,6 +79,9 @@ const dayFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 const groups = computed(() => {
+  if (PUBLIC_DEMO) {
+    return results.value.length ? [{ title: "公开示例", items: results.value }] : [];
+  }
   if (resultMode.value === "semantic") {
     return results.value.length
       ? [{ title: "按语义相似度排序 · 待人工核验", items: results.value }]
@@ -232,7 +235,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="page-workspace page-shell sentinel-search-workspace">
+  <main class="page-workspace page-shell sentinel-search-workspace" :class="{ 'demo-search': PUBLIC_DEMO }">
     <section class="search-main sentinel-question-page" aria-labelledby="searchTitle">
       <div class="sentinel-page-header page-header">
         <h2 id="searchTitle">{{ PUBLIC_DEMO ? "检索公开示例" : "问图检索" }}</h2>
@@ -262,23 +265,23 @@ onMounted(async () => {
         <div class="question-layout">
           <aside class="question-filter-panel" aria-label="检索筛选">
             <div class="filter-panel-head">
-              <strong>筛选条件</strong>
-              <span>模式 / 相机 / 时间</span>
+              <strong>{{ PUBLIC_DEMO ? '试试这两个查询' : '筛选条件' }}</strong>
+              <span>{{ PUBLIC_DEMO ? '检索已有衣着标签' : '模式 / 相机 / 时间' }}</span>
             </div>
-            <label>
+            <label v-if="!PUBLIC_DEMO">
               检索模式
               <select v-model="mode" name="search_mode" :disabled="searching" @change="changeMode">
                 <option value="semantic" :disabled="!semanticEnabled">Qwen 语义候选（需核验）</option>
                 <option value="structured">严格标签匹配</option>
               </select>
             </label>
-            <p v-if="capabilities" class="search-coverage">
+            <p v-if="capabilities && !PUBLIC_DEMO" class="search-coverage">
               语义索引 {{ capabilities.indexed_crops }}/{{ capabilities.total_crops }}；
               已有属性 {{ capabilities.labeled_crops }}/{{ capabilities.total_crops }}
               <span v-if="!PUBLIC_DEMO && !capabilities.auto_index_on_ingest"> · 新增数据自动索引未开启</span>
             </p>
             <p v-if="capabilityError" role="status">{{ capabilityError }}</p>
-            <label>
+            <label v-if="!PUBLIC_DEMO">
               摄像头
               <select v-model="cameraId" name="camera_id">
                 <option value="">全部摄像头</option>
@@ -288,12 +291,14 @@ onMounted(async () => {
               </select>
             </label>
             <DateTimeField
+              v-if="!PUBLIC_DEMO"
               v-model="startTime"
               label="开始时间"
               name="start_time"
               placeholder="选择开始时间"
             />
             <DateTimeField
+              v-if="!PUBLIC_DEMO"
               v-model="endTime"
               label="结束时间"
               name="end_time"
@@ -324,9 +329,9 @@ onMounted(async () => {
               </button>
             </div>
             <div class="metric-list search-metrics">
-              <div><span>全部人物裁剪</span><strong>{{ cropTotal }}</strong></div>
-              <div><span>全部有人帧</span><strong>{{ imageTotal }}</strong></div>
-              <div><span>运行视频流</span><strong>{{ runningCount }}</strong></div>
+              <div><span>{{ PUBLIC_DEMO ? '示例裁剪' : '全部人物裁剪' }}</span><strong>{{ cropTotal }}</strong></div>
+              <div><span>{{ PUBLIC_DEMO ? '公开照片' : '全部有人帧' }}</span><strong>{{ imageTotal }}</strong></div>
+              <div v-if="!PUBLIC_DEMO"><span>运行视频流</span><strong>{{ runningCount }}</strong></div>
             </div>
           </aside>
 
@@ -349,7 +354,7 @@ onMounted(async () => {
               <EmptyState
                 v-else-if="status === 'empty'"
                 :title="resultMode === 'semantic' ? '暂无语义候选' : '没有标签命中'"
-                :hint="resultMode === 'semantic'
+                :hint="PUBLIC_DEMO ? '示例中没有这个衣着标签。点击「深色」查看可命中的裁剪。' : resultMode === 'semantic'
                   ? '请调整描述或筛选条件；未召回不代表目标一定不存在。'
                   : '严格标签匹配依赖已解析的属性；属性为空时不会命中，可切换到语义候选。'"
               />
@@ -379,6 +384,21 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.demo-search .sentinel-page-header {
+  min-height: 0;
+  padding-block: 12px;
+}
+
+.demo-search .query-chips button {
+  min-height: 44px;
+}
+
+@media (max-width: 760px) {
+  .demo-search .metric-list {
+    display: none;
+  }
+}
+
 .search-coverage {
   color: #64748b;
   font-size: 12px;

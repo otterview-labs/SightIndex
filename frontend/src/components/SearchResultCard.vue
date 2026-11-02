@@ -76,7 +76,7 @@ const hasRerankScore = computed(
       </div>
       <div class="question-card-meta">
         <span>图片 {{ shortId(item.image_id) }}</span>
-        <span>{{ fmtTime(item.captured_at) }}</span>
+        <span>{{ PUBLIC_DEMO ? '预处理示例' : fmtTime(item.captured_at) }}</span>
         <span v-if="place">{{ place }}</span>
       </div>
       <div v-if="chips.length" class="attribute-chip-row">

@@ -38,7 +38,11 @@ quota system. Static assets and health probes do not consume that budget.
 
 The one-worker container runs as UID 1000 with a read-only image, dropped capabilities, 512 MB
 memory limit, limited CPU, an internal Docker network without internet egress, and disposable
-tmpfs storage. Every restart reloads the sample snapshot after checking its media hashes. No visitor files or prompts persist. Snapshot provenance is in `samples/demo/manifest.json`.
+tmpfs storage. A separate 64 MB ingress proxy connects this internal network to the published
+loopback port; the application itself has no external network. This is needed because Docker
+does not publish ports on an internal-only network. Every restart reloads the sample snapshot
+after checking its media hashes. No visitor files or prompts persist. Snapshot provenance is
+in `samples/demo/manifest.json`.
 Do not attach a production database or media directory. The seed command refuses an existing
 database instead of replacing it.
 

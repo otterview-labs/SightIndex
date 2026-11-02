@@ -16,8 +16,6 @@ services:
     tmpfs:
       - /tmp:size=96m,mode=1777
       - /demo:size=64m,uid=1000,gid=1000,mode=0700
-    ports:
-      - "127.0.0.1:${SIGHTINDEX_DEMO_PORT:-18081}:8000"
     mem_limit: 512m
     cpus: 0.75
     pids_limit: 64
@@ -57,6 +55,35 @@ services:
     logging:
       driver: json-file
       options: {max-size: 5m, max-file: "2"}
+  ingress:
+    image: caddy:2
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /config:size=8m,uid=1000,gid=1000,mode=0700
+      - /data:size=8m,uid=1000,gid=1000,mode=0700
+    volumes:
+      - ./ingress.Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "127.0.0.1:${SIGHTINDEX_DEMO_PORT:-18081}:8080"
+    networks: [default, ingress]
+    depends_on:
+      demo: {condition: service_healthy}
+    mem_limit: 64m
+    cpus: 0.15
+    pids_limit: 32
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/health"]
+      interval: 20s
+      timeout: 6s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
 networks:
   default:
     internal: true
+  ingress: {}
