@@ -1,0 +1,72 @@
+{
+  "source_commit": "0ccf7feef36f06a9764ee98070823e6ed8e84561",
+  "captured_on": "2026-11-02",
+  "sample_sha256": "3868b6f944b16b18edd143c784e420137deb2b07fb1be00d5f782bc31cac349d",
+  "detector": "OpenCV 4.11.0 HOG, hit threshold 0.5",
+  "labels": "Actual cv_tone outputs using local YOLO-pose keypoints; precomputed, not inferred online",
+  "pose_weights_sha256": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+  "notes": "Four people in source; two detector crops, padded crops include nearby people. No identities assigned. Not an accuracy benchmark.",
+  "files_sha256": {
+    "annotated.png": "e25c007c0ec263dbdda5c708dfcc09b8a03293de05c8698dd93312154a52d6e2",
+    "crop-1.png": "c39627e9e4f9b1bd2f8dee7585567dff34ba6c6cdaca70ae55d12c19acee9abd",
+    "crop-2.png": "cc38316cf161c22be2c73fc0b9dd130eabf5d677a1309572da07ee424114a819"
+  },
+  "thumbnail": "annotated.png",
+  "crops": [
+    {
+      "file": "crop-1.png",
+      "bbox": {
+        "x": 451,
+        "y": 231,
+        "width": 265,
+        "height": 530,
+        "confidence": 2.3718031448079273,
+        "label": "person",
+        "crop_width": 393,
+        "crop_height": 739,
+        "frame_width": 1200,
+        "frame_height": 800,
+        "quality_pass": true
+      },
+      "attributes": {
+        "object_type": "person",
+        "clothing": {
+          "upper_color": "dark",
+          "lower_color": "light",
+          "lower_length": "short"
+        },
+        "source": "cv_tone",
+        "notes": "按关键点取样；饱和度不足时只给深浅，无把握的项留空",
+        "facing": "front"
+      }
+    },
+    {
+      "file": "crop-2.png",
+      "bbox": {
+        "x": 177,
+        "y": 183,
+        "width": 297,
+        "height": 593,
+        "confidence": 2.1785642572212964,
+        "label": "person",
+        "crop_width": 439,
+        "crop_height": 800,
+        "frame_width": 1200,
+        "frame_height": 800,
+        "quality_pass": true
+      },
+      "attributes": {
+        "object_type": "person",
+        "clothing": {
+          "upper_color": "dark",
+          "lower_color": "dark",
+          "upper_length": "short",
+          "lower_length": "long"
+        },
+        "source": "cv_tone",
+        "notes": "按关键点取样；饱和度不足时只给深浅，无把握的项留空",
+        "facing": "front"
+      }
+    }
+  ]
+}

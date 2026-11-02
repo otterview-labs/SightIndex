@@ -12,7 +12,12 @@ import { useToast } from "@/composables/useToast";
 import { useVideoPlayer } from "@/composables/useVideoPlayer";
 import { DISPLAY_TIME_ZONE, fmtTime, shortId } from "@/utils/format";
 
-const QUERY_CHIPS = [
+import { PUBLIC_DEMO } from "@/demo";
+
+const QUERY_CHIPS = PUBLIC_DEMO ? [
+  { query: "深色", label: "深色" },
+  { query: "浅色上衣", label: "浅色上衣（查看空结果）" },
+] : [
   { query: "红衣戴帽的人", label: "红衣戴帽" },
   { query: "戴眼镜的人", label: "戴眼镜" },
   { query: "背包的人", label: "背包" },
@@ -230,8 +235,8 @@ onMounted(async () => {
   <main class="page-workspace page-shell sentinel-search-workspace">
     <section class="search-main sentinel-question-page" aria-labelledby="searchTitle">
       <div class="sentinel-page-header page-header">
-        <h2 id="searchTitle">问图检索</h2>
-        <div class="entity-segment" aria-label="检索对象">
+        <h2 id="searchTitle">{{ PUBLIC_DEMO ? "检索公开示例" : "问图检索" }}</h2>
+        <div v-if="!PUBLIC_DEMO" class="entity-segment" aria-label="检索对象">
           <button class="active" type="button">人员</button>
           <button type="button" disabled>车辆</button>
         </div>
@@ -248,7 +253,7 @@ onMounted(async () => {
           <input
             v-model="query"
             name="query"
-            placeholder="例如：黑色上衣并且背包、戴眼镜、看手机"
+            :placeholder="PUBLIC_DEMO ? '试试：深色 / 浅色上衣' : '例如：黑色上衣并且背包、戴眼镜、看手机'"
             required
           />
           <button class="button primary" type="submit" :disabled="searching">检索</button>
@@ -270,7 +275,7 @@ onMounted(async () => {
             <p v-if="capabilities" class="search-coverage">
               语义索引 {{ capabilities.indexed_crops }}/{{ capabilities.total_crops }}；
               已有属性 {{ capabilities.labeled_crops }}/{{ capabilities.total_crops }}
-              <span v-if="!capabilities.auto_index_on_ingest"> · 新增数据自动索引未开启</span>
+              <span v-if="!PUBLIC_DEMO && !capabilities.auto_index_on_ingest"> · 新增数据自动索引未开启</span>
             </p>
             <p v-if="capabilityError" role="status">{{ capabilityError }}</p>
             <label>
@@ -304,7 +309,7 @@ onMounted(async () => {
                 {{ chip.label }}
               </button>
             </div>
-            <div class="attribute-panel">
+            <div v-if="!PUBLIC_DEMO" class="attribute-panel">
               <div>
                 <strong>结构化解析</strong>
                 <span>{{ attributeStatus }}</span>

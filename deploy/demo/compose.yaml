@@ -1,0 +1,62 @@
+name: sightindex-demo
+services:
+  demo:
+    image: ${SIGHTINDEX_DEMO_IMAGE:-sightindex-demo:local}
+    build:
+      context: ../..
+      dockerfile: deploy/demo/Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=96m,mode=1777
+      - /demo:size=64m,uid=1000,gid=1000,mode=0700
+    ports:
+      - "127.0.0.1:${SIGHTINDEX_DEMO_PORT:-18081}:8000"
+    mem_limit: 512m
+    cpus: 0.75
+    pids_limit: 64
+    environment:
+      ENVIRONMENT: public-demo
+      PUBLIC_DEMO_READ_ONLY: "true"
+      DATABASE_URL: sqlite:////demo/demo.db
+      DATA_DIR: /demo/media
+      PUBLIC_BASE_URL: ${SIGHTINDEX_DEMO_URL:-https://sightindex.otterview.ai}
+      APP_BASIC_AUTH_USERNAME: ""
+      APP_BASIC_AUTH_PASSWORD: ""
+      PERSON_DETECTOR: hog
+      HOG_HIT_THRESHOLD: "0.5"
+      PERSON_CROP_MIN_CONFIDENCE: "0.0"
+      STREAM_AUTOSTART_RUNNING: "false"
+      FACE_RECOGNITION_ON_INGEST: "false"
+      FACE_FALLBACK_TO_FULL_IMAGE: "false"
+      FACE_INSIGHTFACE_ALLOW_DOWNLOAD: "false"
+      MILVUS_ENABLED: "false"
+      REID_ENABLED: "false"
+      VECTOR_INDEX_ON_INGEST: "false"
+      VLM_STRUCTURED_ON_INGEST: "false"
+      VLM_STRUCTURED_BACKGROUND: "false"
+      VLM_PROVIDER: none
+      VLM_RERANK_ENABLED: "false"
+      VLM_RERANK_PROVIDER: none
+      EMBEDDING_PROVIDER: none
+      VISUAL_EMBEDDING_PROVIDER: none
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 20s
+      timeout: 6s
+      start_period: 45s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+networks:
+  default:
+    internal: true

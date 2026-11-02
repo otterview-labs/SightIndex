@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "SightIndex"
     environment: str = "dev"
+    public_demo_read_only: bool = False
     local_timezone: str = "Asia/Shanghai"
     database_url: str = "sqlite:///./sightindex.db"
     database_pool_size: int = Field(default=10, ge=1, le=100)

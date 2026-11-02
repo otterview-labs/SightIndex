@@ -18,6 +18,7 @@ from app.api.upload_limits import UploadSizeLimitMiddleware
 from app.config.settings import Settings, get_settings
 from app.db.session import SessionLocal, init_db
 from app.models.media import VideoStream
+from app.public_demo import PublicDemoGuard, validate_public_demo
 from app.services.storage import InvalidUploadError, StorageService
 from app.services.stream_runtime import stream_runtime
 from app.services.vector_index_queue import attribute_queue, vector_index_queue
@@ -41,10 +42,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     StorageService(settings).ensure_dirs()
     if settings.auto_create_tables:
         init_db()
-    vector_index_queue.start(settings)
-    attribute_queue.start(settings)
-    if settings.stream_autostart_running:
-        _autostart_running_streams()
+    if not settings.public_demo_read_only:
+        vector_index_queue.start(settings)
+        attribute_queue.start(settings)
+        if settings.stream_autostart_running:
+            _autostart_running_streams()
     try:
         yield
     finally:
@@ -55,8 +57,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    if settings.public_demo_read_only:
+        validate_public_demo(settings)
     StorageService(settings).ensure_dirs()
-    app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    app = FastAPI(
+        title=settings.app_name, lifespan=lifespan,
+        docs_url=None if settings.public_demo_read_only else "/docs",
+        redoc_url=None if settings.public_demo_read_only else "/redoc",
+        openapi_url=None if settings.public_demo_read_only else "/openapi.json",
+    )
     app.add_middleware(UploadSizeLimitMiddleware, settings=settings)
 
     @app.exception_handler(InvalidUploadError)
@@ -72,6 +81,8 @@ def create_app() -> FastAPI:
     )
     if settings.app_basic_auth_username and settings.app_basic_auth_password:
         app.middleware("http")(_basic_auth_middleware(settings))
+    if settings.public_demo_read_only:
+        app.add_middleware(PublicDemoGuard)
     app.include_router(api_router)
     app.include_router(openai_compatible_router)
     app.include_router(scene_summary_router)

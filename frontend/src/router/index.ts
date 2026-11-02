@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
+import { PUBLIC_DEMO } from "@/demo";
 
 export const SECTIONS = [
   { path: "/", name: "monitor", label: "监控", title: "视频分析台" },
@@ -28,6 +29,10 @@ export const router = createRouter({
   history: createWebHistory(),
   routes,
   scrollBehavior: () => ({ top: 0 }),
+});
+
+router.beforeEach((to) => {
+  if (PUBLIC_DEMO && !["search", "observations"].includes(String(to.name))) return "/search";
 });
 
 router.afterEach((to) => {

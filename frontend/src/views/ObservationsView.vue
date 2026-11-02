@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { PUBLIC_DEMO } from "@/demo";
 import { RouterLink } from "vue-router";
 
 import { face as faceApi, persons as personsApi, search as searchApi } from "@/api/client";
@@ -142,7 +143,7 @@ async function load(resetOffset = false) {
     const start = total.value ? offset.value + 1 : 0;
     const end = Math.min(offset.value + items.value.length, total.value);
     status.value = `${start}-${end} / ${total.value}`;
-    void loadDiagnostics(items.value.map((item) => String(item.crop_id)), sequence, controller.signal);
+    if (!PUBLIC_DEMO) void loadDiagnostics(items.value.map((item) => String(item.crop_id)), sequence, controller.signal);
   } catch (error) {
     if (sequence !== loadSequence || controller.signal.aborted) return;
     status.value = "加载失败";
@@ -409,13 +410,13 @@ onMounted(async () => {
 
     <section class="observation-shell" aria-labelledby="observationTitle">
       <div class="observation-head page-header">
-        <h2 id="observationTitle">观察大宽表</h2>
+        <h2 id="observationTitle">{{ PUBLIC_DEMO ? "示例观察表" : "观察大宽表" }}</h2>
         <div class="observation-actions">
-          <label class="observation-person-select">
+          <label v-if="!PUBLIC_DEMO" class="observation-person-select">
             入库人员
             <PersonSelect v-model="activePersonId" :persons="persons" />
           </label>
-          <form class="observation-person-create" @submit.prevent="createPerson">
+          <form v-if="!PUBLIC_DEMO" class="observation-person-create" @submit.prevent="createPerson">
             <label>
               新人姓名
               <input v-model="newPersonName" placeholder="输入姓名" autocomplete="off" required />
@@ -426,7 +427,7 @@ onMounted(async () => {
               {{ creatingPerson ? "新增中" : "新增" }}
             </button>
           </form>
-          <button class="button ghost" type="button" :disabled="rebuilding" @click="rebuild">
+          <button v-if="!PUBLIC_DEMO" class="button ghost" type="button" :disabled="rebuilding" @click="rebuild">
             {{ rebuilding ? "重建中" : "重建最近 500" }}
           </button>
           <div class="table-status">{{ status }}</div>
@@ -610,7 +611,9 @@ onMounted(async () => {
               </td>
               <td>
                 <div class="observation-row-actions">
+                  <a v-if="PUBLIC_DEMO" class="mini-link" href="/data/uploads/nasa-walk.jpg" target="_blank" rel="noreferrer">查看原图</a>
                   <button
+                    v-if="!PUBLIC_DEMO"
                     class="mini-button primary"
                     type="button"
                     :title="activePersonId ? '' : '请先选择入库人员'"
@@ -627,14 +630,14 @@ onMounted(async () => {
                     看轨迹
                   </RouterLink>
                   <RouterLink
-                    v-if="item.crop_id"
+                    v-if="item.crop_id && !PUBLIC_DEMO"
                     class="mini-link"
                     :to="{ path: '/reid', query: { crop_id: item.crop_id } }"
                   >
                     找相似
                   </RouterLink>
                   <button
-                    v-if="item.image_id"
+                    v-if="item.image_id && !PUBLIC_DEMO"
                     class="mini-button"
                     type="button"
                     title="在源视频中定位此画面"
@@ -643,7 +646,7 @@ onMounted(async () => {
                     定位视频
                   </button>
                   <button
-                    v-if="item.crop_id && !item.person_id"
+                    v-if="!PUBLIC_DEMO && item.crop_id && !item.person_id"
                     class="mini-button"
                     type="button"
                     :disabled="busyCrop === item.crop_id || !activePersonId"
@@ -652,7 +655,7 @@ onMounted(async () => {
                     标记人员
                   </button>
                   <button
-                    v-if="item.crop_id && item.person_id"
+                    v-if="!PUBLIC_DEMO && item.crop_id && item.person_id"
                     class="mini-button"
                     type="button"
                     :disabled="busyCrop === item.crop_id"

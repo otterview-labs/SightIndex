@@ -29,6 +29,7 @@ async function mountView(context, overrides = {}) {
   };
   const mocks = {
     vue,
+    "@/demo": { PUBLIC_DEMO: false },
     "@/api/client": { search: api, attributes: {} },
     "@/components/EmptyState.vue": {},
     "@/components/DateTimeField.vue": {},

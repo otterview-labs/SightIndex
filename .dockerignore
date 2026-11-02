@@ -7,6 +7,12 @@
 !deploy/
 !deploy/containers/
 !deploy/containers/**
+!deploy/demo/
+!deploy/demo/**
+!samples/
+!samples/nasa-walk.jpg
+!samples/demo/
+!samples/demo/**
 !deploy/agx/
 !deploy/agx/reid_service/
 !deploy/agx/reid_service/**

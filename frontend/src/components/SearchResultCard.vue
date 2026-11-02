@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { PUBLIC_DEMO } from "@/demo";
 
 import type { SearchResultItem } from "@/api/types";
 import { structuredAttributeChips } from "@/utils/attributes";
@@ -50,7 +51,7 @@ const hasRerankScore = computed(
       <img :src="imageUrl" alt="检索结果" loading="lazy" decoding="async" />
       <span v-if="hasScore" class="score-badge">{{ semantic ? "相似度" : "score" }} {{ semantic ? item.score.toFixed(3) : formatScore(item.score) }}</span>
       <button
-        v-if="item.image_id"
+        v-if="item.image_id && !PUBLIC_DEMO"
         class="card-locate-video"
         type="button"
         title="在源视频中定位此画面"

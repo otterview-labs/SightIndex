@@ -39,6 +39,7 @@ async function mountView(context, overrides = {}) {
   };
   const mocks = {
     vue,
+    "@/demo": { PUBLIC_DEMO: false },
     "vue-router": { RouterLink: {} },
     "@/api/client": {
       search: {
