@@ -50,6 +50,40 @@ def test_backfill_does_not_publish_historical_provider_errors(monkeypatch, tmp_p
     assert response.json()["errors"] == ["Attribute analysis failed; check server logs"]
 
 
+def test_observation_rebuild_logs_private_failure_without_publishing_it(
+    monkeypatch, tmp_path, caplog,
+):
+    main = load_app(monkeypatch, tmp_path, "observation-errors")
+    from app.db.session import SessionLocal
+    from app.models.media import Image, PersonCrop
+    from app.services.observation_index import ObservationIndexService
+
+    private = "synthetic-password /private/observation-index"
+
+    def fail(*_args):
+        raise RuntimeError(private)
+
+    with TestClient(main.create_app()) as client:
+        with SessionLocal() as db:
+            image = Image(image_url="/data/synthetic.jpg", source_type="image")
+            db.add(image)
+            db.flush()
+            crop = PersonCrop(image_id=image.id, crop_url="/data/synthetic-crop.jpg", bbox={})
+            db.add(crop)
+            db.commit()
+            crop_id = str(crop.id)
+        monkeypatch.setattr(ObservationIndexService, "upsert_crop", fail)
+        with caplog.at_level(logging.ERROR):
+            response = client.post("/api/search/observations/rebuild")
+    assert response.status_code == 200
+    assert response.json() == {
+        "requested": 1000, "seen": 1, "indexed": 0,
+        "errors": [f"{crop_id}: Observation indexing failed; check server logs"],
+    }
+    assert private not in response.text
+    assert private in caplog.text
+
+
 def _load_reid_server_without_model_dependencies(monkeypatch):
     # Exercise the real HTTP handlers while preventing model imports/downloads and GPU use.
     monkeypatch.setattr(sys, "path", sys.path.copy())
