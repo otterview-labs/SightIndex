@@ -1,5 +1,8 @@
 # SightIndex
 
+[![Checks](https://github.com/otterview-labs/SightIndex/actions/workflows/checks.yml/badge.svg)](https://github.com/otterview-labs/SightIndex/actions/workflows/checks.yml)
+[Apache-2.0 core](LICENSE_SCOPE.md)
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [First run](docs/first-run.md) | [Issues](https://github.com/otterview-labs/SightIndex/issues)
 
 **Search images, video and camera footage in your own workspace.**
@@ -17,11 +20,16 @@ services when you need semantic search or cross-camera candidates.
 and matches existing CV-derived labels. No semantic, face or ReID service is running.
 [Sample credit and limitations](samples/README.md). UI shown in its current Chinese version.*
 
-**Try it in your browser:** open the [public demo](http://43.153.213.96/search), click `深色`
-(dark clothing), then inspect the crops and original photograph in the observation table.
-No account or installation is needed. The read-only demo searches two preprocessed crops from
-one credited public photograph through the real API. It does not accept uploads or run semantic,
-face or ReID inference. [Demo setup and boundaries](deploy/demo/README.md).
+The live demo needs no login: click `深色` (dark clothing), inspect the person crops,
+then open the observation table to check the original photo. It searches two preprocessed
+crops from one credited public photograph through the real API. Uploads and semantic,
+face and ReID inference are disabled. [Demo setup](deploy/demo/README.md).
+
+## Start here
+
+| Explore the console | Run it locally | Integrate it |
+| --- | --- | --- |
+| [Live search](http://43.153.213.96/search) and [console tour](docs/showcase.md) | [First run](docs/first-run.md) with the CPU sample | [API examples](#api-examples) and [deployment guide](docs/deployment.md) |
 
 ## From media to review
 

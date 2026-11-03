@@ -31,3 +31,9 @@ Only load model code and local model directories from trusted sources. A depende
 update does not make arbitrary custom model code safe to execute.
 
 No production services or GPU runtimes are changed by this repository update.
+
+## 2026-11-03: public error responses
+
+The person-crop search endpoint preserves known query validation messages while logging unexpected exceptions privately. Attribute backfill responses retain their error count without publishing provider exceptions, including errors restored from previous local task state. ReID warmup and image-decode failures return stable public messages; the service logs retain diagnostic details, and readiness remains HTTP 503 when loading fails.
+
+Regression tests inject synthetic private paths and credentials into service errors and verify that HTTP responses do not contain them. ReID HTTP tests replace model imports with controlled stubs; they do not establish GPU inference readiness.

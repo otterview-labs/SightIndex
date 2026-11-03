@@ -241,5 +241,5 @@ def backfill_person_crop_attributes(
         "force": force,
         "seen": progress.attempted - before.attempted,
         "updated": progress.updated - before.updated,
-        "errors": progress.last_errors,
+        "errors": ["Attribute analysis failed; check server logs" for _ in progress.last_errors],
     }

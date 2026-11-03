@@ -1,5 +1,8 @@
 # SightIndex
 
+[![Checks](https://github.com/otterview-labs/SightIndex/actions/workflows/checks.yml/badge.svg)](https://github.com/otterview-labs/SightIndex/actions/workflows/checks.yml)
+[Apache-2.0 core](LICENSE_SCOPE.md)
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [首次体验](docs/first-run.zh-CN.md) | [反馈问题](https://github.com/otterview-labs/SightIndex/issues)
 
 **在自己的环境里，检索图片、视频和摄像头画面。**
@@ -15,10 +18,15 @@ SightIndex 接入素材，提取原始帧与人员裁剪图，通过 Vue 控制�
 *实际页面截图，使用公开 NASA 样例、SQLite 和 OpenCV HOG。输入“深色”匹配的是 CV 已提取的标签；
 未启用语义检索、人脸识别或 ReID。图片来源与使用边界见[样例说明](samples/README.md)。*
 
-**不用安装，直接试试：**打开[在线演示](http://43.153.213.96/search)，点击“深色”检索，
-再到观察表核对裁剪和原图，无需注册或登录。演示通过实际 API 检索一张公开照片的两个预处理裁剪，
-仅供查看，不接收上传，也不执行语义、人脸或 ReID 推理。
-部署方法和演示范围见[说明](deploy/demo/README.md)。
+在线演示无需登录：点击“深色”，查看人员裁剪图，再打开观察表核对原图。
+这是一个只读样例，通过真实 API 检索一张公开照片的两个预处理裁剪。
+不接收上传，也不执行语义、人脸或 ReID 推理。[演示部署说明](deploy/demo/README.md)
+
+## 从哪里开始
+
+| 先看效果 | 在本地试用 | 接入自己的系统 |
+| --- | --- | --- |
+| [在线检索](http://43.153.213.96/search)和[界面说明](docs/showcase.zh-CN.md) | [首次体验](docs/first-run.zh-CN.md)，跑通 CPU 样例 | [核心 API](docs/api-core-functions.zh-CN.md)和[部署说明](docs/deployment.zh-CN.md) |
 
 ## 从素材到人工复核
 

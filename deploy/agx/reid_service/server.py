@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import logging
 import os
 import sys
 import threading
@@ -28,6 +29,8 @@ import torch
 from fastapi import FastAPI, Header, HTTPException
 from PIL import Image
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 SERVICE_ROOT = Path(__file__).parent
 VENDOR_ROOT = SERVICE_ROOT / "sapiensid"
@@ -114,10 +117,9 @@ def _warm_runtime() -> None:
     global _runtime_error
     try:
         _load_runtime()
-    except HTTPException as exc:
-        _runtime_error = str(exc.detail)
-    except Exception as exc:  # the readiness endpoint exposes a bounded summary
-        _runtime_error = f"{type(exc).__name__}: {exc}"[:500]
+    except Exception:
+        logger.exception("ReID runtime warmup failed")
+        _runtime_error = "ReID model could not load; check service logs"
 
 
 def _start_warmup() -> None:
@@ -275,7 +277,8 @@ def _decode(payload: EmbedRequest) -> Image.Image:
             raw = base64.b64decode(payload.image_base64)
             return Image.open(io.BytesIO(raw)).convert("RGB")
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"invalid image_base64: {exc}") from exc
+            logger.warning("Invalid ReID image_base64", exc_info=True)
+            raise HTTPException(status_code=400, detail="invalid image_base64") from exc
     if payload.image_url:
         path = payload.image_url
         if path.startswith("/data/"):
@@ -285,7 +288,8 @@ def _decode(payload: EmbedRequest) -> Image.Image:
         try:
             return Image.open(path).convert("RGB")
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"invalid image_url: {exc}") from exc
+            logger.warning("Invalid ReID image_url", exc_info=True)
+            raise HTTPException(status_code=400, detail="invalid image_url") from exc
     raise HTTPException(status_code=400, detail="image_base64 or image_url required")
 
 

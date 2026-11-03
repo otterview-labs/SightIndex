@@ -1,3 +1,4 @@
+import logging
 import tempfile
 import uuid
 from datetime import datetime
@@ -26,7 +27,21 @@ from app.services.search import VisualSearchService
 from app.services.semantic_search import SemanticSearchService, SemanticSearchUnavailable
 from app.services.vector_index import VectorIndexError, VectorIndexingService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+def _public_label_query_error(exc: ValueError) -> str:
+    # Preserve actionable query validation without returning arbitrary provider/DB exceptions.
+    for message in (
+        "该否定或未知条件暂不支持，请使用明确的标签条件，不会忽略条件继续检索",
+        "暂不支持“或”条件，请拆分查询；多个标签默认同时满足",
+        "同一标签包含矛盾条件，请拆分查询",
+        "开始时间不能晚于结束时间",
+    ):
+        if exc.args == (message,):
+            return message
+    return "Unable to search person crops; check the query and server logs"
 
 
 @router.get("/semantic/status", response_model=SemanticSearchStatus)
@@ -56,7 +71,8 @@ def search_images(
     try:
         return VisualSearchService(db, settings).search(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("Visual search failed", exc_info=True)
+        raise HTTPException(status_code=400, detail=_public_label_query_error(exc)) from exc
 
 
 @router.post("/person-crops", response_model=SearchResponse)
@@ -69,7 +85,8 @@ def search_person_crops(
     try:
         return VisualSearchService(db, settings).search(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("Visual search failed", exc_info=True)
+        raise HTTPException(status_code=400, detail=_public_label_query_error(exc)) from exc
 
 
 @router.post("/index/rebuild", response_model=IndexRebuildResponse)
