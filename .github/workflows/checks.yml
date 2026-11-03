@@ -68,6 +68,8 @@ jobs:
         run: |
           python -c "import json; from main import app; print(json.dumps(app.openapi()))" > "$RUNNER_TEMP/openapi.json"
           node frontend/scripts/check-api.mjs "$RUNNER_TEMP/openapi.json"
+          OPENAPI_SRC="$RUNNER_TEMP/openapi.json" npm --prefix frontend run gen:api
+          npm --prefix frontend run typecheck
 
   demo:
     name: Read-only demo container

@@ -21,4 +21,4 @@ omegaconf>=2.3,<2.4
 pyrootutils==1.0.4
 safetensors>=0.4,<1
 pandas>=2,<4
-pillow>=10.4,<13
+pillow>=13,<14

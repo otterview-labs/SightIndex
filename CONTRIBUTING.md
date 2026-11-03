@@ -41,7 +41,14 @@ To check API calls locally, export the spec without relying on an already runnin
 ```bash
 .venv/bin/python -c 'import json; from main import app; print(json.dumps(app.openapi()))' > /tmp/sightindex-openapi.json
 node frontend/scripts/check-api.mjs /tmp/sightindex-openapi.json
+OPENAPI_SRC=/tmp/sightindex-openapi.json npm --prefix frontend run gen:api
+npm --prefix frontend run typecheck
 ```
+
+`openapi-typescript` stays on 6.7.6 while its 7.x dependency chain requires an unpatched
+Minimatch version. The scoped override uses the patched Undici 6 fetch implementation.
+CI regenerates types from the current OpenAPI schema and type-checks the frontend; keep
+that check when changing the generator or its dependencies.
 
 Keep frontend changes consistent with the existing console and check both desktop and mobile.
 Update the English and Chinese guides when changing installation, configuration or API behavior.

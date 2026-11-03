@@ -2,7 +2,8 @@
 name = "sightindex"
 version = "0.1.0"
 description = "Self-hosted visual indexing and retrieval for images, video, and camera streams."
-requires-python = ">=3.11"
+# InsightFace's NumPy 1.x stack and the patched ONNX toolchain share 3.11/3.12.
+requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.0",
@@ -10,7 +11,7 @@ dependencies = [
   "psycopg[binary]>=3.2.0",
   "pydantic-settings>=2.4.0",
   "python-multipart>=0.0.9",
-  "pillow>=10.4.0",
+  "pillow>=13.0.0",
   "pymilvus>=2.4.0,<3.1",
 ]
 
@@ -29,12 +30,12 @@ dev = [
 ]
 vision = [
   "opencv-python-headless>=4.10.0,<5",
-  "pillow>=10.4.0",
+  "pillow>=13.0.0",
   "ultralytics>=8.3.0",
 ]
 visual-embedding = [
   "modelscope>=1.22.0",
-  "pillow>=10.4.0",
+  "pillow>=13.0.0",
   "sentence-transformers>=5.6.0,<6",
   "transformers>=4.57.0",
   "accelerate>=1.11.0",
@@ -50,6 +51,11 @@ face-cuda = [
 [tool.uv]
 # Security floors and runtime API constraints; keep constraints.security.txt in sync.
 constraint-dependencies = [
+  "pillow>=13.0.0",
+  "certifi>=2026.10.18",
+  "filelock>=4.2.1",
+  "onnx>=1.22.0",
+  "setuptools>=84.1.0",
   "fsspec>=2026.6.0",
   "urllib3>=2.8.0",
   "opencv-python>=4.10.0,<5",

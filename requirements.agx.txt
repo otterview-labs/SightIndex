@@ -22,4 +22,4 @@ omegaconf>=2.3.0
 pyrootutils>=1.0.4
 safetensors>=0.4.0
 pandas>=2.0.0
-pillow>=10.4.0
+pillow>=13.0.0

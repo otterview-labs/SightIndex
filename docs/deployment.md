@@ -42,7 +42,7 @@ The Milvus Compose file does not publish its etcd or MinIO ports. Keep that boun
 ## Prerequisites
 
 - A recent Linux distribution with systemd.
-- Python 3.11 or newer.
+- Python 3.11 or 3.12. The optional InsightFace stack requires NumPy 1.x; the patched ONNX toolchain is resolved within this Python range.
 - Node.js 22.18 or newer and npm.
 - Git, curl, and a C/C++ build toolchain.
 - Docker Engine and Docker Compose v2 for PostgreSQL and Milvus.
