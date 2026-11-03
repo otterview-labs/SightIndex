@@ -1,4 +1,7 @@
 # Patched dependency floors. Constraints do not install optional packages.
+# HOG/CascadeClassifier moved out of the base OpenCV 5 wheels. Keep the existing API.
+opencv-python-headless>=4.10.0,<5
+opencv-python>=4.10.0,<5
 # CVE-2026-104851
 fsspec>=2026.6.0
 # CVE-2026-68770; retain the current major-version API.

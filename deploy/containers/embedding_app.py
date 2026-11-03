@@ -19,6 +19,7 @@ from pydantic import Field
 from app.api.upload_limits import UploadSizeLimitMiddleware
 from app.config.settings import Settings
 from app.schemas.embeddings import VisualEmbeddingRequest, VisualEmbeddingResponse
+from app.services.image_decode import open_supported_image
 from deploy.containers.download_embedding_model import WEIGHTS_SHA256, digest
 
 logger = logging.getLogger(__name__)
@@ -84,15 +85,14 @@ def decode_image(payload: str, settings: EmbeddingSettings) -> Image.Image:
     if len(data) > settings.upload_image_max_bytes:
         raise HTTPException(413, "Image exceeds the byte limit")
     try:
-        with Image.open(io.BytesIO(data), formats=["JPEG", "PNG", "WEBP", "BMP", "GIF"]) as image:
-            if image.width * image.height > settings.upload_image_max_pixels:
-                raise HTTPException(413, "Image exceeds the pixel limit")
-            image.load()
+        with open_supported_image(
+            io.BytesIO(data), max_pixels=settings.upload_image_max_pixels,
+        ) as image:
             with ImageOps.exif_transpose(image) as oriented:
                 return oriented.convert("RGB")
     except Image.DecompressionBombError as exc:
         raise HTTPException(413, "Image exceeds the pixel limit") from exc
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise HTTPException(400, "Invalid image") from exc
 
 

@@ -2225,6 +2225,12 @@ def test_face_library_recognition_and_trajectory(monkeypatch, tmp_path):
 def test_face_enrollment_uses_insightface_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("FACE_EMBEDDING_PROVIDER", "insightface")
     monkeypatch.setenv("FACE_INSIGHTFACE_MODEL", "buffalo_l")
+    # The fake provider needs a seeded directory, independent of the developer's
+    # model cache. No weights are read by FakeFaceAnalysis below.
+    model_root = tmp_path / "insightface"
+    (model_root / "models" / "buffalo_l").mkdir(parents=True)
+    monkeypatch.setenv("FACE_INSIGHTFACE_ROOT", str(model_root))
+    monkeypatch.setenv("FACE_INSIGHTFACE_ALLOW_DOWNLOAD", "false")
     # This test is about provider selection. The small-crop upscale pass is covered by
     # test_insightface_small_crop_extraction_upscales_before_embedding; switch it off here so
     # the 64x64 fixture does not pick up an "-upscaled-N.NNx" model suffix and a rescaled bbox.
@@ -2240,8 +2246,9 @@ def test_face_enrollment_uses_insightface_provider(monkeypatch, tmp_path):
         det_score = 0.98
 
     class FakeFaceAnalysis:
-        def __init__(self, name):
+        def __init__(self, name, root):
             self.name = name
+            assert root == str(model_root)
 
         def prepare(self, ctx_id, det_size):
             assert ctx_id == 0

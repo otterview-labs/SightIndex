@@ -6,7 +6,7 @@ psycopg[binary]>=3.2.0
 pydantic-settings>=2.4.0
 python-multipart>=0.0.9
 numpy<2
-opencv-python-headless>=4.10.0
+opencv-python-headless>=4.10.0,<5
 pymilvus>=2.4.0,<3.1
 
 # ReID service (deploy/agx/reid_service). torch/torchvision come from the Jetson wheel venv

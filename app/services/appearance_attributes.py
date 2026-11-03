@@ -98,6 +98,12 @@ def _pose_model(weights: str):
     """
 
     if not Path(weights).is_file():
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "CV clothing labels unavailable: local pose weights missing; "
+            "configure APPEARANCE_POSE_WEIGHTS and run python -m app.preflight"
+        )
         return None
     try:
         from ultralytics import YOLO  # type: ignore[import-not-found]

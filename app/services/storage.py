@@ -7,6 +7,7 @@ from typing import BinaryIO
 from fastapi import UploadFile
 
 from app.config.settings import Settings
+from app.services.image_decode import open_supported_image
 
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"})
 VIDEO_SUFFIXES = frozenset(
@@ -62,10 +63,9 @@ class StorageService:
             self._copy_limited(file.file, source, limit)
             source.seek(0)
             try:
-                with Image.open(source, formats=["JPEG", "PNG", "WEBP", "BMP", "GIF"]) as image:
-                    if image.width * image.height > self.settings.upload_image_max_pixels:
-                        raise InvalidUploadError("Image exceeds the pixel limit", 413)
-                    image.load()
+                with open_supported_image(
+                    source, max_pixels=self.settings.upload_image_max_pixels,
+                ) as image:
                     with ImageOps.exif_transpose(image) as oriented:
                         with oriented.convert("RGB") as pixels:
                             pixels.info.clear()

@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     # when saturation justifies one; below the floor it reports brightness rather than inventing
     # a colour, because on this footage the median saturation is 29 and a hue there is noise.
     appearance_tone_on_ingest: bool = True
+    # Local-only pose asset used for clothing labels; never downloaded during ingestion.
+    appearance_pose_weights: Path = Path.home() / ".cache" / "yolov8n-pose.pt"
     # A hue is claimed only above this saturation and brightness. The floor sits at the 90th
     # percentile of measured garment patches: below it, every strong colour in this footage came
     # from shadow, where hue is noise -- that is what turned a black shirt blue.
