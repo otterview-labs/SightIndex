@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,8 @@ from app.models.persons import Person
 from app.models.vectors import FaceEmbedding, VectorIndexCapacityLock, VLEmbedding
 from app.schemas.common import SearchFilters
 from app.services.time_utils import database_datetime, database_search_filters
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -144,8 +147,9 @@ class ObservationIndexService:
             try:
                 self.upsert_crop(crop)
                 indexed += 1
-            except Exception as exc:
-                errors.append(f"{crop.id}: {exc}")
+            except Exception:  # noqa: PERF203 -- Keep processing the other crops after a failure.
+                logger.exception("Observation indexing failed for crop %s", crop.id)
+                errors.append(f"{crop.id}: Observation indexing failed; check server logs")
         self.db.commit()
         return {"requested": limit, "seen": len(crops), "indexed": indexed, "errors": errors}
 
