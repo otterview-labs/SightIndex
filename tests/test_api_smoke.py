@@ -68,6 +68,32 @@ def test_spa_serves_index_for_client_routes(monkeypatch, tmp_path):
         assert client.get("/api/persons").status_code == 200
 
 
+@pytest.mark.parametrize("unsafe_path", [
+    "/escape.txt",
+    "/link/private.txt",
+    "/%2e%2e/dist-private/private.txt",
+    "/..%2fdist-private%2fprivate.txt",
+    "/%2fetc/passwd",
+])
+def test_spa_never_serves_files_outside_dist(monkeypatch, tmp_path, unsafe_path):
+    main = load_app(monkeypatch, tmp_path, "test-spa-boundary")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>application shell</html>")
+    outside = tmp_path / "dist-private"
+    outside.mkdir()
+    private = outside / "private.txt"
+    private.write_text("private sentinel never served")
+    (dist / "escape.txt").symlink_to(private)
+    (dist / "link").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(main, "FRONTEND_DIST", dist)
+    with TestClient(main.create_app()) as client:
+        response = client.get(unsafe_path)
+        assert response.status_code == 200
+        assert response.text == "<html>application shell</html>"
+        assert response.headers["cache-control"] == "no-store"
+
+
 def test_spa_reports_missing_build_instead_of_404(monkeypatch, tmp_path):
     main = load_app(monkeypatch, tmp_path, "test-spa-missing")
     monkeypatch.setattr(main, "FRONTEND_DIST", tmp_path / "not-built")
