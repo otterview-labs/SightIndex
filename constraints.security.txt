@@ -1,4 +1,10 @@
 # Patched dependency floors. Constraints do not install optional packages.
+# GitHub advisories for the image codecs, CA bundle and model toolchain.
+pillow>=13.0.0
+certifi>=2026.10.18
+filelock>=4.2.1
+onnx>=1.22.0
+setuptools>=84.1.0
 # HOG/CascadeClassifier moved out of the base OpenCV 5 wheels. Keep the existing API.
 opencv-python-headless>=4.10.0,<5
 opencv-python>=4.10.0,<5

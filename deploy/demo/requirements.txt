@@ -4,5 +4,5 @@ uvicorn>=0.30.0,<1
 sqlalchemy>=2.0.30,<3
 pydantic-settings>=2.4.0,<3
 python-multipart>=0.0.9
-pillow>=10.4.0
+pillow>=13.0.0
 opencv-python-headless==4.11.0.86

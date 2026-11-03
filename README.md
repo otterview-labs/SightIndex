@@ -84,7 +84,7 @@ per deployment unless those responsibilities are moved to separate workers.
 
 Prerequisites:
 
-- Python 3.11 or newer.
+- Python 3.11 or 3.12. The optional InsightFace stack still requires NumPy 1.x.
 - Node.js 22.18 or newer for the locked frontend toolchain.
 - The default CPU workflow uses prebuilt Python wheels on supported platforms. Optional
   model runtimes may require a C/C++ toolchain and platform-specific instructions.
