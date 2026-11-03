@@ -1,6 +1,7 @@
 import base64
 import binascii
 import logging
+import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -140,8 +141,11 @@ def _mount_frontend(app: FastAPI) -> None:
     @app.get("/{spa_path:path}", include_in_schema=False)
     def spa(spa_path: str) -> FileResponse:
         # A real file under dist (favicon, robots.txt) wins; anything else is a client route.
-        candidate = (FRONTEND_DIST / spa_path).resolve()
-        if spa_path and candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST.resolve()):
+        # Normalize symlinks before checking the separator-terminated boundary.
+        # Check containment before any file stat/open, including compatibility files.
+        root = os.path.realpath(FRONTEND_DIST)
+        candidate = os.path.realpath(os.path.join(root, spa_path))
+        if spa_path and candidate.startswith(root + os.sep) and os.path.isfile(candidate):
             return FileResponse(candidate)
         return FileResponse(index_file, headers=NO_CACHE_HEADERS)
 
