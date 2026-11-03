@@ -145,6 +145,7 @@ def backfill_clothing_tone(
     """
 
     service = AppearanceAttributeService(
+        pose_weights=str(settings.appearance_pose_weights.expanduser()),
         saturation_floor=settings.appearance_tone_saturation_floor,
         hue_value_floor=settings.appearance_tone_hue_value_floor,
         dark_ratio=settings.appearance_tone_dark_ratio,

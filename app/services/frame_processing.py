@@ -1013,6 +1013,7 @@ class FrameProcessingService:
 
             stature_service = StatureService(self.db, self.settings)
             service = AppearanceAttributeService(
+                pose_weights=str(self.settings.appearance_pose_weights.expanduser()),
                 saturation_floor=self.settings.appearance_tone_saturation_floor,
                 hue_value_floor=self.settings.appearance_tone_hue_value_floor,
                 dark_ratio=self.settings.appearance_tone_dark_ratio,

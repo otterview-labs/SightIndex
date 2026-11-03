@@ -28,7 +28,7 @@ dev = [
   "transformers>=4.40.0",
 ]
 vision = [
-  "opencv-python-headless>=4.10.0",
+  "opencv-python-headless>=4.10.0,<5",
   "pillow>=10.4.0",
   "ultralytics>=8.3.0",
 ]
@@ -43,13 +43,18 @@ visual-embedding = [
 face-cuda = [
   "insightface==0.7.3",
   "onnxruntime-gpu>=1.23.0",
-  "opencv-python-headless>=4.10.0",
+  "opencv-python-headless>=4.10.0,<5",
   "numpy<2",
 ]
 
 [tool.uv]
-# Security floors for transitive dependencies; keep constraints.security.txt in sync.
-constraint-dependencies = ["fsspec>=2026.6.0", "urllib3>=2.8.0"]
+# Security floors and runtime API constraints; keep constraints.security.txt in sync.
+constraint-dependencies = [
+  "fsspec>=2026.6.0",
+  "urllib3>=2.8.0",
+  "opencv-python>=4.10.0,<5",
+  "opencv-python-headless>=4.10.0,<5",
+]
 
 [tool.setuptools.packages.find]
 # Without this, setuptools refuses to build: it sees app/, data/ and deploy/ at the top

@@ -86,7 +86,8 @@ Prerequisites:
 
 - Python 3.11 or newer.
 - Node.js 22.18 or newer for the locked frontend toolchain.
-- A C/C++ build toolchain for native Python dependencies.
+- The default CPU workflow uses prebuilt Python wheels on supported platforms. Optional
+  model runtimes may require a C/C++ toolchain and platform-specific instructions.
 
 Clone the public repository and create a local environment:
 
@@ -95,12 +96,20 @@ git clone https://github.com/otterview-labs/SightIndex.git
 cd SightIndex
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.dev.txt
+.venv/bin/python -m pip install -r requirements.cpu.txt
 cp .env.example .env
+.venv/bin/python -m app.preflight
 ```
 
+The CPU entry point runs SQLite + OpenCV HOG without Torch, InsightFace or a Milvus client.
+HOG detects people; CV clothing labels additionally need the optional Ultralytics runtime and
+a local pose checkpoint configured with `APPEARANCE_POSE_WEIGHTS`. The preflight reports missing
+prerequisites without downloading weights or contacting services. It does not run inference.
+See the [first-run guide](docs/first-run.md) before expecting label or semantic search results.
+
 The requirements files share security version floors in `constraints.security.txt`; `uv.lock`
-contains the resolved versions. Existing installations and container images need an update or rebuild
+resolves the pyproject environment, rather than pinning this CPU requirements file.
+Existing installations and container images need an update or rebuild
 to pick up the [dependency security fixes](SECURITY_UPDATES.md).
 
 The example configuration uses SQLite and disables external model services. Build the console and

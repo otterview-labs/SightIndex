@@ -91,7 +91,8 @@ API 进程还负责视频流捕获线程和向量索引队列。除非已将这�
 
 - Python 3.11 或更高版本。
 - 锁定的前端工具链需要 Node.js 22.18 或更高版本。
-- 用于构建 Python 原生依赖的 C/C++ 编译工具链。
+- 默认 CPU 流程在支持的平台使用预编译 Python 包；可选模型运行时可能需要 C/C++
+  编译工具链和对应平台的安装步骤。
 
 克隆公开仓库并创建本地环境：
 
@@ -100,11 +101,18 @@ git clone https://github.com/otterview-labs/SightIndex.git
 cd SightIndex
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.dev.txt
+.venv/bin/python -m pip install -r requirements.cpu.txt
 cp .env.example .env
+.venv/bin/python -m app.preflight
 ```
 
-各 requirements 文件共用 `constraints.security.txt` 中的安全版本下限，`uv.lock` 记录解析后的版本。
+CPU 入口使用 SQLite + OpenCV HOG，不安装 Torch、InsightFace 或 Milvus 客户端。
+HOG 用于检测人员；CV 衣着标签还需要可选的 Ultralytics 运行时和本地姿态权重，
+通过 `APPEARANCE_POSE_WEIGHTS` 指定。预检会提示缺失项，不下载权重、不访问外部服务，
+也不会执行模型推理。使用标签或语义检索前，请先阅读[首次体验](docs/first-run.zh-CN.md)。
+
+各 requirements 文件共用 `constraints.security.txt` 中的安全版本下限。
+`uv.lock` 解析的是 pyproject 环境，并不是这份 CPU requirements 的锁文件。
 已安装的环境需要更新依赖，容器需要重新构建，才能应用[依赖安全修复](SECURITY_UPDATES.md)。
 
 示例配置使用 SQLite，并禁用外部模型服务。构建控制台并启动 API：

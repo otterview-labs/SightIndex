@@ -11,6 +11,23 @@ Follow the [README quick start](../README.md#quick-start), then open `http://127
 The default `.env.example` uses SQLite and the OpenCV HOG person detector. Milvus, VLM,
 semantic search and ReID are disabled.
 
+Run a read-only prerequisite check before processing:
+
+```bash
+.venv/bin/python -m app.preflight
+# Machine-readable output; --strict also fails on optional missing prerequisites:
+.venv/bin/python -m app.preflight --json
+```
+
+The command checks local dependencies and file presence. It does not load models, contact
+services, access the database or verify inference. A clothing-label warning does not prevent
+HOG detection. The basic CPU installation does not include Ultralytics: to generate CV clothing
+labels, install the optional vision runtime (`pip install -c constraints.security.txt '.[vision]'`)
+and prepare a YOLO-pose checkpoint locally, then set `APPEARANCE_POSE_WEIGHTS` to its path.
+Model assets and their licenses must be reviewed separately. Restart the API after changing
+weights. Ingestion does not download pose weights; `YOLO_AUTOINSTALL=false` is the application
+default for optional runtime packages. Image processing can succeed while label search stays empty.
+
 Check the process:
 
 ```bash
@@ -73,8 +90,11 @@ detector; do not use this workflow as a production detection benchmark.
 | Check media counts | Images with crops contribute to `image_with_crops_count`; individual crops contribute to `person_crop_count`. |
 
 Calling `/process` again on a processed image reuses its result, including an empty result.
-Changing the detector and repeating the request with the same image ID does not rerun detection.
-Reprocessing existing media requires a separate data-reprocessing workflow.
+If a processed image has no crops, explicitly retry detection with
+`POST /api/images/IMAGE_ID/process?force=true`. Images that already have crops still reuse those
+crops, even with `force=true`; this endpoint does not replace an existing crop set. To compare
+detectors, upload a separate image record. Changes to vector models or preprocessing still
+require compatible collections and index rebuilding; `force=true` does not migrate collections.
 
 ## Troubleshooting
 
@@ -82,16 +102,16 @@ Reprocessing existing media requires a separate data-reprocessing workflow.
 | --- | --- |
 | Upload succeeds but counts stay at zero | Query the image record and confirm that `/process` ran. Images without crops do not contribute to these counts. |
 | People are visible but the crop list is empty | Inspect the source image, selected detector and parameters. The default HOG detector can miss people; try a clear image before evaluating a different model. |
-| Attribute search returns no matches | The default CV tone pass can produce basic appearance labels. Richer attributes require VLM analysis. Check whether the requested fields actually exist. |
+| Attribute search returns no matches | Run preflight. CV tone labels need Ultralytics and local `APPEARANCE_POSE_WEIGHTS`; HOG detection alone does not generate them. Richer attributes require VLM analysis. Inspect whether the requested fields exist. |
 | Semantic search returns no matches | Check the embedding service, Milvus collection, historical index and coverage. Enabling the flag does not build an index. |
-| Results do not change after switching models | Processed images reuse their results. Vector-model or preprocessing changes also require a separate collection; plan reprocessing and indexing using the deployment guide. |
+| Results do not change after switching models | `force=true` retries a previously empty detection result. Existing crops are always reused; upload a separate record to compare detectors. Vector-model changes also require compatible collections and index rebuilding. |
 | API or media requests return 401 | Check whether Basic Auth is enabled and use your configured account. Keep passwords out of issue reports. |
 
 ## Enable a search workflow
 
 | Workflow | Additional setup |
 | --- | --- |
-| Existing-label search | Basic CV tone labels may exist by default. Configure VLM analysis for richer attributes. Strict matching cannot match missing fields. |
+| Existing-label search | CV tone labels require local pose weights and the optional runtime. Configure VLM analysis for richer attributes. Strict matching cannot match missing fields. |
 | Semantic text search | Configure Qwen embeddings, a separate Milvus visual collection and its index. Verify coverage before enabling `SEMANTIC_SEARCH_ENABLED`. |
 | Cross-camera candidates | Configure ReID and its index, then evaluate on a labeled dataset. |
 

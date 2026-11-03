@@ -1,0 +1,111 @@
+name: Repository checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu:
+    name: CPU tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    env:
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      YOLO_AUTOINSTALL: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.cpu.txt
+            requirements.test.txt
+            constraints.security.txt
+      - run: python -m pip install -r requirements.test.txt
+      - name: Backend tests (model-only checks skip when runtimes are absent)
+        run: python -m pytest -q -ra --junitxml=test-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-python-${{ matrix.python }}
+          path: test-results.xml
+      - uses: actions/setup-node@v4
+        if: matrix.python == '3.12'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend tests, type check and build
+        if: matrix.python == '3.12'
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run test:search
+          npm --prefix frontend run test:observations
+          npm --prefix frontend run test:reid
+          npm --prefix frontend run test:api
+          npm --prefix frontend run build
+      - name: Check frontend API calls against this checkout
+        if: matrix.python == '3.12'
+        env:
+          DATA_DIR: ${{ runner.temp }}/sightindex-api-check
+          DATABASE_URL: 'sqlite:///:memory:'
+          PERSON_DETECTOR: hog
+        run: |
+          python -c "import json; from main import app; print(json.dumps(app.openapi()))" > "$RUNNER_TEMP/openapi.json"
+          node frontend/scripts/check-api.mjs "$RUNNER_TEMP/openapi.json"
+
+  demo:
+    name: Read-only demo container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SIGHTINDEX_DEMO_URL: http://127.0.0.1:18081
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the isolated sample demo
+        run: docker compose -f deploy/demo/compose.yaml up -d --build --wait --wait-timeout 120
+      - name: Check real search and blocked writes through ingress
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          base = 'http://127.0.0.1:18081'
+          with urlopen(base + '/health', timeout=10) as response:
+              assert response.status == 200
+          with urlopen(base + '/search', timeout=10) as response:
+              assert b'<html' in response.read().lower()
+          request = Request(base + '/api/search/person-crops', data=json.dumps({'query': '深色'}).encode(),
+                            headers={'Content-Type': 'application/json'})
+          with urlopen(request, timeout=10) as response:
+              result = json.load(response)
+              assert len(result['items']) == 2, result
+          try:
+              urlopen(Request(base + '/api/images/upload', data=b''), timeout=10)
+          except HTTPError as error:
+              assert error.code == 403, error.code
+          else:
+              raise AssertionError('Public demo accepted an upload')
+          PY
+      - name: Container logs
+        if: failure()
+        run: docker compose -f deploy/demo/compose.yaml logs --no-color --tail 100
+      - name: Stop demo
+        if: always()
+        run: docker compose -f deploy/demo/compose.yaml down --volumes

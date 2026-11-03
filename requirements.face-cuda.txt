@@ -1,5 +1,5 @@
 -c constraints.security.txt
 insightface==0.7.3
 onnxruntime-gpu>=1.23.0
-opencv-python-headless>=4.10.0
+opencv-python-headless>=4.10.0,<5
 numpy<2
